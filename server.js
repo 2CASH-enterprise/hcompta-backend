@@ -14,6 +14,23 @@ app.use('/api/mariah', require('./routes/mariah.routes'));
 app.get('/', (req, res) => {
   res.send('H-Compta AI backend is running 🚀');
 });
-app.listen(3000, () => {
+<script>
+const API_BASE = "https://hcompta-backend.onrender.com";
+
+async function init() {
+  console.log("Connexion backend...");
+
+  try {
+    const res = await fetch(API_BASE);
+    const text = await res.text();
+    console.log("Backend OK:", text);
+  } catch (error) {
+    console.error("Erreur backend:", error);
+  }
+}
+
+init();
+</script>
+  app.listen(3000, () => {
   console.log('H-Compta AI Backend running on port 3000');
 });
