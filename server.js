@@ -11,6 +11,9 @@ app.use('/api/tva', require('./routes/tva.routes'));
 app.use('/api/export', require('./routes/export.routes'));
 app.use('/api/mariah', require('./routes/mariah.routes'));
 
+app.get('/', (req, res) => {
+  res.send('H-Compta AI backend is running 🚀');
+});
 app.listen(3000, () => {
   console.log('H-Compta AI Backend running on port 3000');
 });
