@@ -21,3 +21,16 @@ router.post('/upload', async (req, res) => {
 });
 
 module.exports = router;
+router.get('/', async (req, res) => {
+  const { data, error } = await supabase
+    .from('pieces')
+    .select('*')
+    .order('uploaded_at', { ascending: false })
+    .limit(5);
+
+  if (error) {
+    return res.status(500).json({ error: error.message });
+  }
+
+  res.json(data);
+});
