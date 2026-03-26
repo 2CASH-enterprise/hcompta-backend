@@ -22,7 +22,7 @@ app.get('/stats/:companyId', async (req, res) => {
     const { count: totalFactures, error: piecesError } = await supabase
       .from('pieces')
       .select('*', { count: 'exact', head: true })
-      .eq('identifiant_entreprise', companyId);
+      .eq('company_id', companyId);
 
     if (piecesError) {
       return res.status(500).json({ error: piecesError.message });
@@ -31,7 +31,7 @@ app.get('/stats/:companyId', async (req, res) => {
     const { count: totalAlertes, error: alertesError } = await supabase
       .from('pieces')
       .select('*', { count: 'exact', head: true })
-      .eq('identifiant_entreprise', companyId)
+      .eq('company_id', companyId)
       .in('status', ['pending', 'a_verifier', 'error']);
 
     if (alertesError) {
@@ -41,7 +41,7 @@ app.get('/stats/:companyId', async (req, res) => {
     const { data: ecritures, error: ecrituresError } = await supabase
       .from('ecritures')
       .select('compte,debit,credit')
-      .eq('identifiant_entreprise', companyId);
+      .eq('company_id', companyId);
 
     if (ecrituresError) {
       return res.status(500).json({ error: ecrituresError.message });
