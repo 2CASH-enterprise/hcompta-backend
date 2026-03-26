@@ -27,7 +27,7 @@ app.get('/stats/:companyId', async (req, res) => {
     const { count: totalFactures, error: piecesError } = await supabase
       .from('pieces')
       .select('*', { count: 'exact', head: true })
-      .eq('identifiant_entreprise', companyId);
+      .eq('company_id', companyId);
 
     if (piecesError) {
       return res.status(500).json({
@@ -39,8 +39,8 @@ app.get('/stats/:companyId', async (req, res) => {
     const { count: totalAlertes, error: alertesError } = await supabase
       .from('pieces')
       .select('*', { count: 'exact', head: true })
-      .eq('identifiant_entreprise', companyId)
-      .in('statut', ['en attente', 'a_vérifier']);
+      .eq('company_id', companyId)
+      .in('status', ['pending', 'a_verifier', 'error', 'en attente', 'a_vérifier']);
 
     if (alertesError) {
       return res.status(500).json({
@@ -52,7 +52,7 @@ app.get('/stats/:companyId', async (req, res) => {
     const { data: ecritures, error: ecrituresError } = await supabase
       .from('ecritures')
       .select('compte,debit,credit')
-      .eq('identifiant_entreprise', companyId);
+      .eq('company_id', companyId);
 
     if (ecrituresError) {
       return res.status(500).json({
@@ -66,12 +66,10 @@ app.get('/stats/:companyId', async (req, res) => {
     for (const e of ecritures || []) {
       const compte = String(e.compte || '');
 
-      // TVA collectée
       if (compte.startsWith('44571')) {
         tvaCollectee += Number(e.credit || 0) - Number(e.debit || 0);
       }
 
-      // TVA déductible
       if (compte.startsWith('44551')) {
         tvaDeductible += Number(e.debit || 0) - Number(e.credit || 0);
       }
@@ -91,9 +89,7 @@ app.get('/stats/:companyId', async (req, res) => {
   }
 });
 
-// Lancement serveur
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
 });
-   
