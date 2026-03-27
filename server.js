@@ -124,6 +124,169 @@ app.get('/pieces/recent/:companyId', async (req, res) => {
     });
   }
 });
+// Toutes les pièces d'une société (sans limite)
+app.get('/pieces/all/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data, error } = await supabase
+      .from('pieces')
+      .select('id, file_name, journal, score_confiance, status')
+      .eq('company_id', companyId)
+      .order('id', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// TVA détaillée : collectée + déductible séparément
+app.get('/tva/detail/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data: ecritures, error } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit')
+      .eq('company_id', companyId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    let tvaCollectee = 0;
+    let tvaDeductible = 0;
+
+    for (const e of ecritures || []) {
+      const compte = String(e.compte || '');
+      if (compte.startsWith('44571')) {
+        tvaCollectee += Number(e.credit || 0) - Number(e.debit || 0);
+      }
+      if (compte.startsWith('44551')) {
+        tvaDeductible += Number(e.debit || 0) - Number(e.credit || 0);
+      }
+    }
+
+    const tvaNette = Math.max(0, tvaCollectee - tvaDeductible);
+
+    return res.json({
+      company_id: companyId,
+      tva_collectee: Math.max(0, tvaCollectee),
+      tva_deductible: Math.max(0, tvaDeductible),
+      tva_nette: tvaNette,
+      taux: 18,
+      periode: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Reporting : synthèse financière depuis les écritures
+app.get('/reporting/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data: ecritures, error } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit')
+      .eq('company_id', companyId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    let ca = 0;
+    let charges = 0;
+
+    for (const e of ecritures || []) {
+      const compte = String(e.compte || '');
+      // Comptes de ventes (7xxx)
+      if (compte.startsWith('7')) {
+        ca += Number(e.credit || 0) - Number(e.debit || 0);
+      }
+      // Comptes de charges (6xxx)
+      if (compte.startsWith('6')) {
+        charges += Number(e.debit || 0) - Number(e.credit || 0);
+      }
+    }
+
+    const resultat = ca - charges;
+    const tauxMarge = ca > 0 ? Math.round((resultat / ca) * 100) : 0;
+
+    return res.json({
+      company_id: companyId,
+      ca: Math.max(0, ca),
+      charges: Math.max(0, charges),
+      resultat,
+      taux_marge: tauxMarge
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Utilisateurs d'une société
+app.get('/utilisateurs/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data, error } = await supabase
+      .from('company_users')
+      .select('*')
+      .eq('company_id', companyId);
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Export Sage — fichier CSV téléchargeable
+app.get('/api/export/sage/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('*')
+      .eq('company_id', companyId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Génération CSV compatible Sage
+    const lignes = (data || []).map(e =>
+      [e.compte || '', e.libelle || '', e.debit || 0, e.credit || 0].join(';')
+    );
+    const csv = ['Compte;Libelle;Debit;Credit', ...lignes].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="export-sage-${companyId}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Export Odoo — fichier CSV téléchargeable
+app.get('/api/export/odoo/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('*')
+      .eq('company_id', companyId);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Génération CSV compatible Odoo
+    const lignes = (data || []).map(e =>
+      [e.compte || '', e.libelle || '', e.debit || 0, e.credit || 0, 'FCFA'].join(',')
+    );
+    const csv = ['account_code,name,debit,credit,currency', ...lignes].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="export-odoo-${companyId}.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/pieces/upload', upload.single('file'), async (req, res) => {
   try {
     const { company_id } = req.body;
