@@ -125,9 +125,6 @@ app.get('/pieces/recent/:companyId', async (req, res) => {
     });
   }
 });
-app.listen(PORT, () => {
-  console.log(`H-Compta AI Backend running on port ${PORT}`);
-});
 app.post('/pieces/upload', upload.single('file'), async (req, res) => {
   try {
     const { company_id } = req.body;
@@ -135,25 +132,27 @@ app.post('/pieces/upload', upload.single('file'), async (req, res) => {
 
     if (!company_id || !file) {
       return res.status(400).json({
-        error: 'company_id et file sont obligatoires'
+        step: 'pieces_upload_validation',
+        error: 'company_id et file sont obligatoires',
       });
     }
 
     const fileName = file.originalname;
 
     const { data, error } = await supabase
-      .from('pieces')
-      .insert([
-        {
-          company_id,
-          file_name: fileName,
-          journal: 'ACH',
-          score_confiance: 0,
-          status: 'pending',
-        }
-      ])
-      .select();
-
+  .from('pieces')
+  .insert([
+    {
+      company_id,
+      uploaded_by: '1d085e85-dfe2-46db-82d2-b7a57b7afc2a',
+      file_name: fileName,
+      journal: 'ACH',
+      score_confiance: 0,
+      status: 'pending',
+    }
+  ])
+  .select();
+  
     if (error) {
       return res.status(500).json({ error: error.message });
     }
@@ -168,4 +167,7 @@ app.post('/pieces/upload', upload.single('file'), async (req, res) => {
       error: err.message
     });
   }
+});
+app.listen(PORT, () => {
+  console.log(`H-Compta AI Backend running on port ${PORT}`);
 });
