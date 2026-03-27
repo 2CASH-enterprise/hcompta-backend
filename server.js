@@ -126,3 +126,45 @@ app.get('/pieces/recent/:companyId', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
 });
+app.post('/pieces/upload', async (req, res) => {
+  try {
+    const { company_id, file_name } = req.body;
+
+    if (!company_id || !file_name) {
+      return res.status(400).json({
+        step: 'pieces_upload_validation',
+        error: 'company_id et file_name sont obligatoires',
+      });
+    }
+
+    const { data, error } = await supabase
+      .from('pieces')
+      .insert([
+        {
+          company_id,
+          file_name,
+          journal: 'ACH',
+          score_confiance: 0,
+          status: 'pending',
+        },
+      ])
+      .select();
+
+    if (error) {
+      return res.status(500).json({
+        step: 'pieces_upload',
+        error: error.message || JSON.stringify(error),
+      });
+    }
+
+    return res.json({
+      message: 'Pièce ajoutée avec succès',
+      piece: data[0] || null,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      step: 'pieces_upload_catch',
+      error: error.message || JSON.stringify(error),
+    });
+  }
+});
