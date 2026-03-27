@@ -103,33 +103,7 @@ app.get('/pieces/recent/:companyId', async (req, res) => {
 
     const { data, error } = await supabase
       .from('pieces')
-      .select('id,file_name,journal,score_confiance,status,created_at')
-      .eq('company_id', companyId)
-      .order('created_at', { ascending: false })
-      .limit(5);
-
-    if (error) {
-      return res.status(500).json({
-        step: 'pieces_recent',
-        error: error.message || JSON.stringify(error),
-      });
-    }
-
-    return res.json(data || []);
-  } catch (error) {
-    return res.status(500).json({
-      step: 'pieces_recent_catch',
-      error: error.message || JSON.stringify(error),
-    });
-  }
-});
-app.get('/pieces/recent/:companyId', async (req, res) => {
-  try {
-    const { companyId } = req.params;
-
-    const { data, error } = await supabase
-      .from('pieces')
-      .select('id,file_name,journal,score_confiance,status')
+      .select('id, file_name, journal, score_confiance, status')
       .eq('company_id', companyId)
       .order('id', { ascending: false })
       .limit(5);
