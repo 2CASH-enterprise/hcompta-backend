@@ -98,7 +98,6 @@ app.get('/stats/:companyId', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
 app.get('/pieces/recent/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
@@ -174,6 +173,7 @@ app.post('/pieces/upload', upload.single('file'), async (req, res) => {
     });
   }
 });
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
 });
