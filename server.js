@@ -1,3 +1,5 @@
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -165,6 +167,47 @@ app.post('/pieces/upload', async (req, res) => {
     return res.status(500).json({
       step: 'pieces_upload_catch',
       error: error.message || JSON.stringify(error),
+    });
+  }
+});
+app.post('/pieces/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { company_id } = req.body;
+    const file = req.file;
+
+    if (!company_id || !file) {
+      return res.status(400).json({
+        error: 'company_id et file sont obligatoires'
+      });
+    }
+
+    const fileName = file.originalname;
+
+    const { data, error } = await supabase
+      .from('pieces')
+      .insert([
+        {
+          company_id,
+          file_name: fileName,
+          journal: 'ACH',
+          score_confiance: 0,
+          status: 'pending',
+        }
+      ])
+      .select();
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({
+      message: 'Upload réussi',
+      piece: data[0]
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      error: err.message
     });
   }
 });
