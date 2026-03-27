@@ -139,20 +139,26 @@ app.post('/pieces/upload', upload.single('file'), async (req, res) => {
 
     const fileName = file.originalname;
 
-    const { data, error } = await supabase
-  .from('pieces')
-  .insert([
-    {
+    console.log("UPLOAD DEBUG", {
       company_id,
       uploaded_by: '1d085e85-dfe2-46db-82d2-b7a57b7afc2a',
-      file_name: fileName,
-      journal: 'ACH',
-      score_confiance: 0,
-      status: 'pending',
-    }
-  ])
-  .select();
-  
+      fileName
+    });
+
+    const { data, error } = await supabase
+      .from('pieces')
+      .insert([
+        {
+          company_id,
+          uploaded_by: '1d085e85-dfe2-46db-82d2-b7a57b7afc2a',
+          file_name: fileName,
+          journal: 'ACH',
+          score_confiance: 0,
+          status: 'pending',
+        }
+      ])
+      .select();
+
     if (error) {
       return res.status(500).json({ error: error.message });
     }
