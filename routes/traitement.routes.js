@@ -81,9 +81,56 @@ Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après, au fo
 }
 
 // ----------------------------------------------------------------
-// HELPER : Télécharger le fichier depuis Supabase Storage
-// en base64 pour l'envoyer à Claude
+// HELPER : Récupérer les exemples validés pour le few-shot learning
 // ----------------------------------------------------------------
+async function getFewShotExemples(journal, pays, limit = 3) {
+  try {
+    const { data } = await supabase
+      .from('prompt_logs')
+      .select('output_payload, created_at')
+      .eq('prompt_code', 'exemple_valide')
+      .eq('score', 100)
+      .order('created_at', { ascending: false })
+      .limit(limit * 4); // Chercher plus pour filtrer par journal/pays
+
+    const exemples = (data || [])
+      .filter(row => {
+        const p = row.output_payload || {};
+        return (p.pays === pays || p.pays === 'ALL') &&
+               (p.journal === journal || !journal);
+      })
+      .slice(0, limit)
+      .map(row => row.output_payload);
+
+    return exemples;
+  } catch(e) {
+    return []; // Non bloquant — le traitement continue sans exemples
+  }
+}
+
+// ----------------------------------------------------------------
+// HELPER : Construire le bloc few-shot à injecter dans le prompt
+// ----------------------------------------------------------------
+function buildFewShotBlock(exemples) {
+  if (!exemples || exemples.length === 0) return '';
+
+  const lines = exemples.map((ex, i) => {
+    const ecrituresStr = (ex.ecritures || [])
+      .map(e => `    {"compte":"${e.compte}","libelle":"${e.libelle}","debit":${e.debit},"credit":${e.credit}}`)
+      .join(',\n');
+    return `
+EXEMPLE VALIDÉ ${i + 1} (${ex.type_piece || 'pièce'} - Journal ${ex.journal || 'OD'}) :
+{
+  "type_piece": "${ex.type_piece || 'autre'}",
+  "journal": "${ex.journal || 'OD'}",
+  "ecritures": [
+${ecrituresStr}
+  ]
+}`;
+  }).join('\n---\n');
+
+  return `\n\nEXEMPLES RÉELS VALIDÉS PAR LE CABINET (utilise-les comme référence) :\n${lines}\n\nFin des exemples. Génère maintenant les écritures pour la pièce soumise.\n`;
+}
 async function getFileAsBase64(fileUrl) {
   try {
     const response = await axios.get(fileUrl, {
@@ -134,8 +181,21 @@ router.post('/piece/:pieceId', async (req, res) => {
     await supabase.from('pieces').update({ status: 'processing' }).eq('id', pieceId);
 
     // 3) Lire le prompt depuis la table prompts (ou fallback)
-    const promptContenu = await getPrompt('analyse_piece', company.country || 'CI')
+    let promptContenu = await getPrompt('analyse_piece', company.country || 'CI')
       || buildDefaultPrompt(company);
+
+    // 3b) MACHINE LEARNING — Enrichir le prompt avec les exemples validés
+    // On détecte d'abord le journal probable pour cibler les exemples pertinents
+    const journalProbable = piece.journal || null;
+    const exemplesFewShot = await getFewShotExemples(
+      journalProbable,
+      company.country || 'CI',
+      3  // 3 exemples max pour ne pas dépasser la fenêtre de contexte
+    );
+    if (exemplesFewShot.length > 0) {
+      // Injecter les exemples à la fin du prompt système
+      promptContenu += buildFewShotBlock(exemplesFewShot);
+    }
 
     // 4) Télécharger le fichier et encoder en base64
     const { base64, contentType } = await getFileAsBase64(piece.file_url);
@@ -222,7 +282,12 @@ router.post('/piece/:pieceId', async (req, res) => {
     await supabase.from('prompt_logs').insert([{
       prompt_code:    'analyse_piece',
       company_id:     piece.company_id,
-      input_payload:  { piece_id: pieceId, file_name: piece.file_name, media_type: mediaType },
+      input_payload:  {
+        piece_id:          pieceId,
+        file_name:         piece.file_name,
+        media_type:        mediaType,
+        few_shot_count:    exemplesFewShot.length, // Nb exemples injectés
+      },
       output_payload: analyse,
       score:          analyse.score_confiance || null,
     }]);
@@ -246,17 +311,19 @@ router.post('/piece/:pieceId', async (req, res) => {
       success:      true,
       piece:        updatedPiece,
       analyse: {
-        type_piece:    analyse.type_piece,
+        type_piece:      analyse.type_piece,
         journal,
-        resume:        analyse.resume,
-        montant_ht:    analyse.montant_ht,
-        tva:           analyse.tva,
-        montant_ttc:   analyse.montant_ttc,
+        resume:          analyse.resume,
+        montant_ht:      analyse.montant_ht,
+        tva:             analyse.tva,
+        montant_ttc:     analyse.montant_ttc,
         score_confiance: analyse.score_confiance,
         equilibre,
       },
-      ecritures_count: ecritures.length,
+      ecritures_count:    ecritures.length,
       ecritures,
+      few_shot_count:     exemplesFewShot.length, // Nb exemples utilisés
+      apprentissage_actif: exemplesFewShot.length > 0,
     });
 
   } catch(err) {
