@@ -1,16 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../config/supabase');
 
-router.get('/sage/:company_id', async (req, res) => {
-  const { company_id } = req.params;
-
-  const { data } = await supabase
-    .from('ecritures')
-    .select('*')
-    .eq('company_id', company_id);
-
-  res.json(data);
-});
+// Les exports Sage et Odoo sont gérés directement dans server.js
+// Ce fichier est conservé pour les futures routes d'export spécifiques
 
 module.exports = router;
