@@ -439,7 +439,9 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
     });
 
   } catch(err) {
-    await supabase.from('pieces').update({ status: 'error' }).eq('id', pieceId).catch(() => {});
+    try {
+      await supabase.from('pieces').update({ status: 'error' }).eq('id', pieceId);
+    } catch(e2) {}
     return res.status(500).json({ error: err.message, pipeline });
   }
 });
