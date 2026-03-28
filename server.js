@@ -10,10 +10,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/pieces',  require('./routes/pieces.routes'));
-app.use('/api/tva',     require('./routes/tva.routes'));
-app.use('/api/export',  require('./routes/export.routes'));
-app.use('/api/mariah',  require('./routes/mariah.routes'));
+app.use('/api/pieces',     require('./routes/pieces.routes'));
+app.use('/api/tva',        require('./routes/tva.routes'));
+app.use('/api/export',     require('./routes/export.routes'));
+app.use('/api/mariah',     require('./routes/mariah.routes'));
+app.use('/api/traitement', require('./routes/traitement.routes'));
 
 // TVA par pays
 const TVA_PAR_PAYS = {
@@ -115,32 +116,16 @@ app.post('/pieces/upload', upload.single('file'), async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-// TVA
-app.get('/tva/detail/:companyId', async (req,res) => {
-  try {
-    const {companyId} = req.params;
-    const periode = new Date().toISOString().slice(0,7);
-    const {data:existing} = await supabase.from('tva_reports').select('*').eq('company_id',companyId).eq('period',periode).single();
-    if(existing) return res.json({company_id:companyId,tva_collectee:existing.tva_collectee,tva_deductible:existing.tva_deductible,tva_nette:existing.tva_nette,taux:18,periode:existing.period,from_report:true,file_url:existing.file_url,status:existing.status});
-    const {data:ecritures} = await supabase.from('ecritures').select('compte,debit,credit').eq('company_id',companyId);
-    let tvaC=0,tvaD=0;
-    for(const e of ecritures||[]){const c=String(e.compte||'');if(c.startsWith('44571'))tvaC+=Number(e.credit||0)-Number(e.debit||0);if(c.startsWith('44551'))tvaD+=Number(e.debit||0)-Number(e.credit||0);}
-    const {data:company} = await supabase.from('companies').select('vat_rate,country').eq('id',companyId).single();
-    return res.json({company_id:companyId,tva_collectee:Math.max(0,tvaC),tva_deductible:Math.max(0,tvaD),tva_nette:Math.max(0,tvaC-tvaD),taux:company?.vat_rate||18,pays:company?.country||'',periode:new Date().toLocaleDateString('fr-FR',{month:'long',year:'numeric'}),from_report:false});
-  } catch(err){return res.status(500).json({error:err.message});}
+// TVA — géré dans /api/tva via routes/tva.routes.js
+// Routes de compatibilité (aliases) pour le frontend existant
+app.get('/tva/detail/:companyId', (req, res) => {
+  req.url = `/detail/${req.params.companyId}`;
+  if (req.query.periode) req.url += `?periode=${req.query.periode}`;
+  require('./routes/tva.routes').handle(req, res);
 });
-
-app.post('/tva/generer/:companyId', async (req,res) => {
-  try {
-    const {companyId} = req.params;
-    const periode = req.body.periode||new Date().toISOString().slice(0,7);
-    const {data:ecritures} = await supabase.from('ecritures').select('compte,debit,credit').eq('company_id',companyId);
-    let tvaC=0,tvaD=0;
-    for(const e of ecritures||[]){const c=String(e.compte||'');if(c.startsWith('44571'))tvaC+=Number(e.credit||0)-Number(e.debit||0);if(c.startsWith('44551'))tvaD+=Number(e.debit||0)-Number(e.credit||0);}
-    const {data,error} = await supabase.from('tva_reports').upsert([{company_id:companyId,period:periode,tva_collectee:Math.max(0,tvaC),tva_deductible:Math.max(0,tvaD),tva_nette:Math.max(0,tvaC-tvaD),status:'generated'}],{onConflict:'company_id,period'}).select().single();
-    if(error) return res.status(500).json({error:error.message});
-    return res.json({success:true,rapport:data});
-  } catch(err){return res.status(500).json({error:err.message});}
+app.post('/tva/generer/:companyId', (req, res) => {
+  req.url = `/generer/${req.params.companyId}`;
+  require('./routes/tva.routes').handle(req, res);
 });
 
 // REPORTING
@@ -182,27 +167,8 @@ app.patch('/notifications/:id/read', async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-// EXPORTS
-app.get('/api/export/sage/:companyId', async (req,res) => {
-  try {
-    const {data,error} = await supabase.from('ecritures').select('journal,date_ecriture,compte,libelle,debit,credit').eq('company_id',req.params.companyId).order('date_ecriture',{ascending:true});
-    if(error) return res.status(500).json({error:error.message});
-    const csv = ['Journal;Date;Compte;Libelle;Debit;Credit',...(data||[]).map(e=>[e.journal||'',e.date_ecriture||'',e.compte||'',e.libelle||'',e.debit||0,e.credit||0].join(';'))].join('\n');
-    res.setHeader('Content-Type','text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition',`attachment; filename="export-sage-${req.params.companyId}.csv"`);
-    return res.send(csv);
-  } catch(err){return res.status(500).json({error:err.message});}
-});
-app.get('/api/export/odoo/:companyId', async (req,res) => {
-  try {
-    const {data,error} = await supabase.from('ecritures').select('journal,date_ecriture,compte,libelle,debit,credit').eq('company_id',req.params.companyId).order('date_ecriture',{ascending:true});
-    if(error) return res.status(500).json({error:error.message});
-    const csv = ['account_code,name,debit,credit,currency,date',...(data||[]).map(e=>[e.compte||'',e.libelle||'',e.debit||0,e.credit||0,'FCFA',e.date_ecriture||''].join(','))].join('\n');
-    res.setHeader('Content-Type','text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition',`attachment; filename="export-odoo-${req.params.companyId}.csv"`);
-    return res.send(csv);
-  } catch(err){return res.status(500).json({error:err.message});}
-});
+// EXPORTS — alias de compatibilité (gérés dans routes/export.routes.js)
+// Les frontends appellent /api/export/sage/... → route file gère directement
 
 // CABINET — helper
 async function getCompaniesForExpert(expertUserId) {
