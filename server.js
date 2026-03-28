@@ -336,6 +336,273 @@ app.post('/pieces/upload', upload.single('file'), async (req, res) => {
     });
   }
 });
+// ============================================================
+// ROUTES CABINET / EXPERT COMPTABLE
+// ============================================================
+
+// KPIs globaux du cabinet
+app.get('/cabinet/stats/:cabinetId', async (req, res) => {
+  try {
+    const { cabinetId } = req.params;
+
+    // Nombre de PME dans le portefeuille
+    const { count: totalClients, error: clientsError } = await supabase
+      .from('company_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', cabinetId);
+
+    // Toutes les pièces en anomalie (tous les clients du cabinet)
+    const { data: companyList } = await supabase
+      .from('company_users')
+      .select('company_id')
+      .eq('user_id', cabinetId);
+
+    const companyIds = (companyList || []).map(c => c.company_id);
+
+    let totalAnomalies = 0;
+    let totalEcritures = 0;
+    let totalPieces = 0;
+    let scoreTotal = 0;
+    let scoreCount = 0;
+
+    if (companyIds.length > 0) {
+      // Anomalies : pièces en erreur ou a_verifier sur tous les clients
+      const { count: anomalies } = await supabase
+        .from('pieces')
+        .select('*', { count: 'exact', head: true })
+        .in('company_id', companyIds)
+        .in('status', ['pending', 'a_verifier', 'error']);
+
+      totalAnomalies = anomalies || 0;
+
+      // Écritures à valider
+      const { count: ecritures } = await supabase
+        .from('ecritures')
+        .select('*', { count: 'exact', head: true })
+        .in('company_id', companyIds);
+
+      totalEcritures = ecritures || 0;
+
+      // Score moyen : basé sur score_confiance des pièces traitées
+      const { data: pieces } = await supabase
+        .from('pieces')
+        .select('score_confiance')
+        .in('company_id', companyIds)
+        .eq('status', 'processed');
+
+      for (const p of pieces || []) {
+        if (p.score_confiance != null) {
+          scoreTotal += Number(p.score_confiance);
+          scoreCount++;
+        }
+      }
+
+      totalPieces = (pieces || []).length;
+    }
+
+    const scoreMoyen = scoreCount > 0 ? Math.round(scoreTotal / scoreCount) : 0;
+
+    return res.json({
+      cabinet_id: cabinetId,
+      total_clients: clientsError ? 0 : (totalClients || 0),
+      total_anomalies: totalAnomalies,
+      ecritures_a_valider: totalEcritures,
+      score_moyen: scoreMoyen,
+      company_ids: companyIds
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Liste des PME du portefeuille cabinet
+app.get('/cabinet/clients/:cabinetId', async (req, res) => {
+  try {
+    const { cabinetId } = req.params;
+
+    // Récupérer les sociétés liées à ce cabinet
+    const { data: links, error: linksError } = await supabase
+      .from('company_users')
+      .select('company_id')
+      .eq('user_id', cabinetId);
+
+    if (linksError) return res.status(500).json({ error: linksError.message });
+
+    const companyIds = (links || []).map(c => c.company_id);
+
+    if (companyIds.length === 0) {
+      // Fallback : retourner la société de test
+      companyIds.push('7098c39b-9961-4344-8bf1-f37919b35fd3');
+    }
+
+    // Pour chaque société, récupérer les stats
+    const clients = [];
+    for (const cid of companyIds) {
+      const { count: alertes } = await supabase
+        .from('pieces')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', cid)
+        .in('status', ['pending', 'a_verifier', 'error']);
+
+      const { data: pieces } = await supabase
+        .from('pieces')
+        .select('score_confiance')
+        .eq('company_id', cid)
+        .eq('status', 'processed');
+
+      let score = 0;
+      const scores = (pieces || []).filter(p => p.score_confiance != null);
+      if (scores.length > 0) {
+        score = Math.round(scores.reduce((s, p) => s + Number(p.score_confiance), 0) / scores.length);
+      }
+
+      // TVA
+      const { data: ecritures } = await supabase
+        .from('ecritures')
+        .select('compte, debit, credit')
+        .eq('company_id', cid);
+
+      let tvaCollectee = 0;
+      let tvaDeductible = 0;
+      for (const e of ecritures || []) {
+        const compte = String(e.compte || '');
+        if (compte.startsWith('44571')) tvaCollectee += Number(e.credit || 0) - Number(e.debit || 0);
+        if (compte.startsWith('44551')) tvaDeductible += Number(e.debit || 0) - Number(e.credit || 0);
+      }
+      const tva = Math.max(0, tvaCollectee - tvaDeductible);
+
+      clients.push({
+        company_id: cid,
+        nom: 'PME ' + cid.substring(0, 8),
+        pays: 'CI',
+        score,
+        alertes: alertes || 0,
+        tva
+      });
+    }
+
+    return res.json(clients);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Anomalies du portefeuille cabinet
+app.get('/cabinet/anomalies/:cabinetId', async (req, res) => {
+  try {
+    const { cabinetId } = req.params;
+
+    const { data: links } = await supabase
+      .from('company_users')
+      .select('company_id')
+      .eq('user_id', cabinetId);
+
+    const companyIds = (links || []).map(c => c.company_id);
+    if (companyIds.length === 0) companyIds.push('7098c39b-9961-4344-8bf1-f37919b35fd3');
+
+    const { data, error } = await supabase
+      .from('pieces')
+      .select('id, file_name, journal, score_confiance, status, company_id')
+      .in('company_id', companyIds)
+      .in('status', ['pending', 'a_verifier', 'error'])
+      .order('id', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Écritures à valider pour le cabinet
+app.get('/cabinet/ecritures/:cabinetId', async (req, res) => {
+  try {
+    const { cabinetId } = req.params;
+
+    const { data: links } = await supabase
+      .from('company_users')
+      .select('company_id')
+      .eq('user_id', cabinetId);
+
+    const companyIds = (links || []).map(c => c.company_id);
+    if (companyIds.length === 0) companyIds.push('7098c39b-9961-4344-8bf1-f37919b35fd3');
+
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('*')
+      .in('company_id', companyIds)
+      .order('id', { ascending: false })
+      .limit(50);
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Invitations reçues par le cabinet
+app.get('/cabinet/invitations/:cabinetId', async (req, res) => {
+  try {
+    const { cabinetId } = req.params;
+
+    const { data, error } = await supabase
+      .from('company_users')
+      .select('*')
+      .eq('user_id', cabinetId);
+
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Stats d'une PME spécifique (pour le cabinet qui ouvre un dossier)
+app.get('/cabinet/pme/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    const { data: pieces, error } = await supabase
+      .from('pieces')
+      .select('id, file_name, journal, score_confiance, status')
+      .eq('company_id', companyId)
+      .order('id', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const total = pieces.length;
+    const alertes = pieces.filter(p => ['pending','a_verifier','error'].includes(p.status)).length;
+    const traites = pieces.filter(p => p.status === 'processed');
+    const score = traites.length > 0
+      ? Math.round(traites.reduce((s, p) => s + Number(p.score_confiance || 0), 0) / traites.length)
+      : 0;
+
+    const { data: ecritures } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit')
+      .eq('company_id', companyId);
+
+    let tvaCollectee = 0, tvaDeductible = 0;
+    for (const e of ecritures || []) {
+      const compte = String(e.compte || '');
+      if (compte.startsWith('44571')) tvaCollectee += Number(e.credit || 0) - Number(e.debit || 0);
+      if (compte.startsWith('44551')) tvaDeductible += Number(e.debit || 0) - Number(e.credit || 0);
+    }
+
+    return res.json({
+      company_id: companyId,
+      total_pieces: total,
+      alertes,
+      score_moyen: score,
+      tva_nette: Math.max(0, tvaCollectee - tvaDeductible),
+      pieces
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
