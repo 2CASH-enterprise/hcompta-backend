@@ -357,6 +357,50 @@ app.post('/demande-demo', async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
+// INVITATIONS — envoi et liste
+app.post('/invitations/envoyer', async (req,res) => {
+  try {
+    const {company_id, email, role, invited_by, expires_at, message} = req.body;
+    if (!company_id || !email || !role) return res.status(400).json({error:'company_id, email et role obligatoires'});
+
+    // Générer un token unique
+    const token = require('crypto').randomBytes(32).toString('hex');
+
+    const {data, error} = await supabase.from('invites').insert([{
+      company_id,
+      email:      email.toLowerCase(),
+      role,
+      token,
+      status:     'pending',
+      expires_at: expires_at || new Date(Date.now() + 7*24*60*60*1000).toISOString(),
+      invited_by: invited_by || null,
+    }]).select().single();
+
+    if (error) return res.status(500).json({error: error.message});
+
+    // TODO: envoyer un email avec le lien d'invitation
+    // Le lien serait : https://hcompta-ai.com/accepter-invitation?token=xxx
+
+    return res.json({
+      success: true,
+      message: `Invitation envoyée à ${email}`,
+      token,
+      invite: data,
+    });
+  } catch(err) {return res.status(500).json({error:err.message});}
+});
+
+app.get('/invitations/:companyId', async (req,res) => {
+  try {
+    const {data,error} = await supabase.from('invites')
+      .select('id, email, role, status, expires_at, created_at')
+      .eq('company_id', req.params.companyId)
+      .order('created_at', {ascending:false});
+    if (error) return res.status(500).json({error:error.message});
+    return res.json(data||[]);
+  } catch(err){return res.status(500).json({error:err.message});}
+});
+
 // BLOG
 app.get('/blog', async (req,res) => {
   try {
