@@ -15,6 +15,7 @@ app.use('/api/tva',        require('./routes/tva.routes'));
 app.use('/api/export',     require('./routes/export.routes'));
 app.use('/api/mariah',     require('./routes/mariah.routes'));
 app.use('/api/traitement', require('./routes/traitement.routes'));
+app.use('/api/learning',   require('./routes/learning.routes'));
 
 // TVA par pays
 const TVA_PAR_PAYS = {
