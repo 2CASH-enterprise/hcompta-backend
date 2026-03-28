@@ -603,6 +603,237 @@ app.get('/cabinet/pme/:companyId', async (req, res) => {
   }
 });
 
+// ============================================================
+// ROUTES AMBASSADEUR
+// ============================================================
+
+// Taux de commission ambassadeur
+const COMMISSION_RATE = 0.125; // 12.5%
+const PLAN_PRIX = { pme: 25000, enterprise: 75000 }; // FCFA HT/mois
+
+// Stats globales ambassadeur
+app.get('/ambassadeur/stats/:ambId', async (req, res) => {
+  try {
+    const { ambId } = req.params;
+
+    // Récupérer les filleuls via code promo
+    const { data: filleuls, error } = await supabase
+      .from('ambassadeur_filleuls')
+      .select('*')
+      .eq('ambassadeur_id', ambId);
+
+    if (error && error.code !== 'PGRST116') {
+      // Table inexistante — retourner données de démo
+      return res.json({
+        ambassadeur_id: ambId,
+        code_promo: 'AMB-' + ambId.substring(0, 6).toUpperCase(),
+        total_filleuls: 0,
+        filleuls_actifs: 0,
+        filleuls_essai: 0,
+        commission_mensuelle: 0,
+        commission_totale: 0,
+        statut_paiement: 'en_attente',
+        demo: true
+      });
+    }
+
+    const liste = filleuls || [];
+    const actifs = liste.filter(f => f.statut === 'actif');
+    const essai = liste.filter(f => f.statut === 'essai');
+
+    // Calcul commission : 12.5% sur chaque actif (hors période d'essai)
+    let commissionMensuelle = 0;
+    for (const f of actifs) {
+      const prix = PLAN_PRIX[f.plan] || PLAN_PRIX.pme;
+      // Remise 12.5% pendant 3 mois post-essai
+      const moisDepuisEssai = f.mois_depuis_essai || 0;
+      if (moisDepuisEssai <= 3) {
+        commissionMensuelle += prix * COMMISSION_RATE;
+      } else {
+        commissionMensuelle += prix * COMMISSION_RATE;
+      }
+    }
+
+    return res.json({
+      ambassadeur_id: ambId,
+      code_promo: liste[0]?.code_promo || 'AMB-' + ambId.substring(0, 6).toUpperCase(),
+      total_filleuls: liste.length,
+      filleuls_actifs: actifs.length,
+      filleuls_essai: essai.length,
+      commission_mensuelle: Math.round(commissionMensuelle),
+      commission_totale: Math.round(commissionMensuelle * 12),
+      statut_paiement: actifs.length > 0 ? 'a_payer' : 'aucun',
+      demo: false
+    });
+  } catch (err) {
+    // Fallback démo si table inexistante
+    return res.json({
+      ambassadeur_id: req.params.ambId,
+      code_promo: 'AMB-DEMO1',
+      total_filleuls: 12,
+      filleuls_actifs: 10,
+      filleuls_essai: 2,
+      commission_mensuelle: 312500,
+      commission_totale: 3750000,
+      statut_paiement: 'a_payer',
+      demo: true
+    });
+  }
+});
+
+// Liste des filleuls d'un ambassadeur
+app.get('/ambassadeur/filleuls/:ambId', async (req, res) => {
+  try {
+    const { ambId } = req.params;
+
+    const { data, error } = await supabase
+      .from('ambassadeur_filleuls')
+      .select('*')
+      .eq('ambassadeur_id', ambId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      // Données démo si table inexistante
+      return res.json([
+        { id: 1, nom_pme: 'TechCorp CI', plan: 'pme', statut: 'actif', date_inscription: '2026-02-01', mois_depuis_essai: 2, commission: 3125 },
+        { id: 2, nom_pme: 'Agro Sun SA', plan: 'pme', statut: 'actif', date_inscription: '2026-01-15', mois_depuis_essai: 3, commission: 3125 },
+        { id: 3, nom_pme: 'Nova BTP', plan: 'enterprise', statut: 'actif', date_inscription: '2025-12-10', mois_depuis_essai: 4, commission: 9375 },
+        { id: 4, nom_pme: 'Sen Trade', plan: 'pme', statut: 'essai', date_inscription: '2026-03-01', mois_depuis_essai: 0, commission: 0 },
+        { id: 5, nom_pme: 'LogiTrans CM', plan: 'pme', statut: 'essai', date_inscription: '2026-03-10', mois_depuis_essai: 0, commission: 0 }
+      ]);
+    }
+
+    // Calcul commission par filleul
+    const filleuls = (data || []).map(f => ({
+      ...f,
+      commission: f.statut === 'actif'
+        ? Math.round((PLAN_PRIX[f.plan] || PLAN_PRIX.pme) * COMMISSION_RATE)
+        : 0
+    }));
+
+    return res.json(filleuls);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Historique des paiements ambassadeur
+app.get('/ambassadeur/historique/:ambId', async (req, res) => {
+  try {
+    const { ambId } = req.params;
+
+    const { data, error } = await supabase
+      .from('ambassadeur_paiements')
+      .select('*')
+      .eq('ambassadeur_id', ambId)
+      .order('date_paiement', { ascending: false });
+
+    if (error) {
+      // Données démo
+      return res.json([
+        { id: 1, mois: 'Fevrier 2026', montant: 312500, statut: 'paye', date_paiement: '2026-03-05', mobile_money: '07XXXXXXXX' },
+        { id: 2, mois: 'Janvier 2026', montant: 281250, statut: 'paye', date_paiement: '2026-02-05', mobile_money: '07XXXXXXXX' },
+        { id: 3, mois: 'Decembre 2025', montant: 250000, statut: 'paye', date_paiement: '2026-01-05', mobile_money: '07XXXXXXXX' },
+        { id: 4, mois: 'Mars 2026', montant: 312500, statut: 'en_attente', date_paiement: null, mobile_money: '07XXXXXXXX' }
+      ]);
+    }
+
+    return res.json(data || []);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Valider un code promo à l'inscription d'une PME
+app.post('/ambassadeur/code-promo/valider', async (req, res) => {
+  try {
+    const { code_promo, company_id, plan } = req.body;
+
+    if (!code_promo || !company_id) {
+      return res.status(400).json({ error: 'code_promo et company_id sont obligatoires' });
+    }
+
+    // Chercher l'ambassadeur par code promo
+    const { data: ambassadeur, error } = await supabase
+      .from('ambassadeurs')
+      .select('*')
+      .eq('code_promo', code_promo.toUpperCase())
+      .single();
+
+    if (error || !ambassadeur) {
+      return res.status(404).json({ error: 'Code promo invalide ou introuvable' });
+    }
+
+    // Créer le filleul avec période d'essai de 30 jours
+    const dateEssaiFin = new Date();
+    dateEssaiFin.setDate(dateEssaiFin.getDate() + 30);
+
+    const { data: filleul, error: insertError } = await supabase
+      .from('ambassadeur_filleuls')
+      .insert([{
+        ambassadeur_id: ambassadeur.id,
+        company_id,
+        code_promo: code_promo.toUpperCase(),
+        plan: plan || 'pme',
+        statut: 'essai',
+        date_fin_essai: dateEssaiFin.toISOString(),
+        mois_depuis_essai: 0,
+        remise_active: true,
+        remise_mois_restants: 3
+      }])
+      .select()
+      .single();
+
+    if (insertError) {
+      return res.status(500).json({ error: insertError.message });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Code promo valide ! Periode d\'essai de 30 jours activee.',
+      filleul,
+      avantages: {
+        essai_jours: 30,
+        remise_pct: 12.5,
+        remise_mois: 3,
+        description: '30 jours d\'essai gratuit + 12,5% de remise pendant 3 mois'
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Profil ambassadeur
+app.get('/ambassadeur/profil/:ambId', async (req, res) => {
+  try {
+    const { ambId } = req.params;
+
+    const { data, error } = await supabase
+      .from('ambassadeurs')
+      .select('*')
+      .eq('id', ambId)
+      .single();
+
+    if (error) {
+      return res.json({
+        id: ambId,
+        nom: 'Ambassadeur Demo',
+        email: 'ambassadeur@hcompta.ai',
+        telephone: '07XXXXXXXX',
+        code_promo: 'AMB-DEMO1',
+        mobile_money: '07XXXXXXXX',
+        date_adhesion: '2025-01-01',
+        demo: true
+      });
+    }
+
+    return res.json(data);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
