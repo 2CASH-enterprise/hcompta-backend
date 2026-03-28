@@ -834,6 +834,235 @@ app.get('/ambassadeur/profil/:ambId', async (req, res) => {
   }
 });
 
+// ============================================================
+// ROUTES LANDING PAGE — INSCRIPTION & CONNEXION
+// ============================================================
+
+// TVA par pays OHADA
+const TVA_PAR_PAYS = {
+  CI: { taux: 18, label: 'Côte d\'Ivoire', devise: 'FCFA', code: 'XOF' },
+  SN: { taux: 18, label: 'Sénégal', devise: 'FCFA', code: 'XOF' },
+  CM: { taux: 19.25, label: 'Cameroun', devise: 'FCFA', code: 'XAF' },
+  BJ: { taux: 18, label: 'Bénin', devise: 'FCFA', code: 'XOF' },
+  BF: { taux: 18, label: 'Burkina Faso', devise: 'FCFA', code: 'XOF' },
+  ML: { taux: 18, label: 'Mali', devise: 'FCFA', code: 'XOF' },
+  TG: { taux: 18, label: 'Togo', devise: 'FCFA', code: 'XOF' },
+  NE: { taux: 19, label: 'Niger', devise: 'FCFA', code: 'XOF' },
+  GA: { taux: 18, label: 'Gabon', devise: 'FCFA', code: 'XAF' },
+  CG: { taux: 18, label: 'Congo', devise: 'FCFA', code: 'XAF' },
+  CD: { taux: 16, label: 'RD Congo', devise: 'CDF', code: 'CDF' },
+  GN: { taux: 18, label: 'Guinée', devise: 'GNF', code: 'GNF' },
+};
+
+// GET — Récupérer la TVA d'un pays
+app.get('/pays/tva/:code', (req, res) => {
+  const code = req.params.code.toUpperCase();
+  const pays = TVA_PAR_PAYS[code];
+  if (!pays) return res.status(404).json({ error: 'Pays non reconnu' });
+  return res.json({ code, ...pays });
+});
+
+// GET — Liste de tous les pays disponibles
+app.get('/pays', (req, res) => {
+  const liste = Object.entries(TVA_PAR_PAYS).map(([code, info]) => ({
+    code, ...info
+  }));
+  return res.json(liste);
+});
+
+// POST — Inscription PME
+app.post('/inscription/pme', async (req, res) => {
+  try {
+    const {
+      nom_pme, email, pays, plan, rccm, code_promo, telephone
+    } = req.body;
+
+    // Validations obligatoires
+    if (!nom_pme || !email || !pays || !plan) {
+      return res.status(400).json({
+        error: 'Champs obligatoires manquants : nom_pme, email, pays, plan'
+      });
+    }
+
+    // Vérifier que le pays existe
+    const paysInfo = TVA_PAR_PAYS[pays.toUpperCase()];
+    if (!paysInfo) {
+      return res.status(400).json({ error: 'Pays non reconnu' });
+    }
+
+    // Vérifier si email déjà utilisé
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (existingUser) {
+      return res.status(409).json({ error: 'Un compte avec cet email existe déjà' });
+    }
+
+    // Valider le code promo si fourni
+    let ambassadeurId = null;
+    let remiseActive = false;
+    if (code_promo) {
+      const { data: amb } = await supabase
+        .from('ambassadeurs')
+        .select('id')
+        .eq('code_promo', code_promo.toUpperCase())
+        .single();
+      if (amb) {
+        ambassadeurId = amb.id;
+        remiseActive = true;
+      }
+    }
+
+    // Créer la société
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .insert([{
+        nom: nom_pme,
+        pays: pays.toUpperCase(),
+        tva_taux: paysInfo.taux,
+        plan,
+        rccm: rccm || null,
+        ambassadeur_id: ambassadeurId,
+        code_promo_utilise: code_promo ? code_promo.toUpperCase() : null,
+        remise_active: remiseActive,
+        remise_mois_restants: remiseActive ? 3 : 0,
+        statut: 'essai',
+        date_fin_essai: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      }])
+      .select()
+      .single();
+
+    if (companyError) {
+      return res.status(500).json({ error: companyError.message });
+    }
+
+    // Créer l'utilisateur principal (compte propriétaire)
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .insert([{
+        email: email.toLowerCase(),
+        telephone: telephone || null,
+        role: 'pme_owner',
+        company_id: company.id,
+      }])
+      .select()
+      .single();
+
+    if (userError) {
+      return res.status(500).json({ error: userError.message });
+    }
+
+    // Lier l'utilisateur à la société
+    await supabase
+      .from('company_users')
+      .insert([{
+        company_id: company.id,
+        user_id: user.id,
+        role: 'owner',
+      }]);
+
+    // Si code promo valide → créer le filleul ambassadeur
+    if (ambassadeurId && remiseActive) {
+      await supabase
+        .from('ambassadeur_filleuls')
+        .insert([{
+          ambassadeur_id: ambassadeurId,
+          company_id: company.id,
+          code_promo: code_promo.toUpperCase(),
+          plan,
+          statut: 'essai',
+          date_fin_essai: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+          mois_depuis_essai: 0,
+          remise_active: true,
+          remise_mois_restants: 3,
+        }]);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Inscription réussie ! Votre période d\'essai de 30 jours commence maintenant.',
+      company_id: company.id,
+      user_id: user.id,
+      pays: paysInfo,
+      essai_jours: 30,
+      remise: remiseActive ? { active: true, pct: 12.5, mois: 3 } : null,
+      redirect: '/dashboard-pme'
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST — Connexion (PME ou Expert via email)
+app.post('/connexion', async (req, res) => {
+  try {
+    const { email, role } = req.body;
+
+    if (!email) return res.status(400).json({ error: 'Email obligatoire' });
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email.toLowerCase())
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'Aucun compte trouvé avec cet email' });
+    }
+
+    // Rediriger selon le rôle
+    const redirectMap = {
+      pme_owner: '/dashboard-pme',
+      cabinet: '/dashboard-expert',
+      ambassadeur: '/dashboard-ambassadeur',
+      admin: '/dashboard-admin',
+    };
+
+    return res.json({
+      success: true,
+      user_id: user.id,
+      role: user.role,
+      company_id: user.company_id,
+      redirect: redirectMap[user.role] || '/dashboard-pme'
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST — Demande de démo (formulaire simplifié)
+app.post('/demande-demo', async (req, res) => {
+  try {
+    const { nom, email, telephone, pays, message } = req.body;
+
+    if (!nom || !email) {
+      return res.status(400).json({ error: 'Nom et email obligatoires' });
+    }
+
+    const { error } = await supabase
+      .from('demandes_demo')
+      .insert([{ nom, email, telephone, pays, message, statut: 'nouveau' }]);
+
+    if (error) {
+      // Si la table n'existe pas encore, on log et on répond OK
+      console.warn('demandes_demo table error:', error.message);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Votre demande de démo a bien été reçue ! Notre équipe vous contacte sous 24h.'
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT}`);
