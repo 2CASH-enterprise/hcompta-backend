@@ -326,6 +326,20 @@ app.post('/inscription/pme', async (req,res) => {
     const {data:company,error:e2} = await supabase.from('companies').insert([{company_name,email:email.toLowerCase(),rccm,country:pays.toUpperCase(),vat_rate:paysInfo.taux,plan:plan.toLowerCase(),subscription_amount_ht_fcfa:montant,trial_start_date:new Date().toISOString().slice(0,10),trial_end_date:trialEnd.toISOString().slice(0,10),owner_user_id:user.id,ambassador_id:ambassadorId,promo_code_used:code_promo?code_promo.toUpperCase():null,status:'trial'}]).select().single();
     if(e2) return res.status(500).json({error:e2.message});
     await supabase.from('company_users').insert([{company_id:company.id,user_id:user.id,role_in_company:'OWNER',status:'active'}]);
+
+    // Envoyer email de bienvenue
+    try {
+      const emailService = require('./services/email.service');
+      await emailService.envoyerConfirmationInscription({
+        emailDestinataire: email,
+        nomPME:            company_name,
+        nomContact:        full_name || null,
+        pays:              pays.toUpperCase(),
+      });
+    } catch(emailErr) {
+      console.error('Erreur email bienvenue:', emailErr.message);
+    }
+
     return res.status(201).json({success:true,message:"Inscription réussie ! Votre période d'essai de 30 jours commence maintenant.",user_id:user.id,company_id:company.id,trial_end:trialEnd.toISOString().slice(0,10),remise:ambassadorId?{active:true,mois:3}:null});
   } catch(err){return res.status(500).json({error:err.message});}
 });
@@ -367,7 +381,14 @@ app.post('/invitations/envoyer', async (req,res) => {
     // Générer un token unique
     const token = require('crypto').randomBytes(32).toString('hex');
 
-    const {data, error} = await supabase.from('invites').insert([{
+    // Récupérer les infos de la société
+    const {data: company} = await supabase
+      .from('companies')
+      .select('company_name, country')
+      .eq('id', company_id)
+      .single();
+
+    const {data: invite, error} = await supabase.from('invites').insert([{
       company_id,
       email:      email.toLowerCase(),
       role,
@@ -379,14 +400,34 @@ app.post('/invitations/envoyer', async (req,res) => {
 
     if (error) return res.status(500).json({error: error.message});
 
-    // TODO: envoyer un email avec le lien d'invitation
-    // Le lien serait : https://hcompta-ai.com/accepter-invitation?token=xxx
+    // Envoyer l'email selon le rôle
+    try {
+      const emailService = require('./services/email.service');
+      if (role === 'EXPERT') {
+        await emailService.envoyerInvitationCabinet({
+          emailDestinataire: email,
+          nomPME:            company?.company_name || 'Une PME',
+          tokenInvitation:   token,
+          expiresAt:         invite.expires_at,
+        });
+      } else {
+        await emailService.envoyerInvitationCollaborateur({
+          emailDestinataire: email,
+          nomPME:            company?.company_name || 'Une PME',
+          tokenInvitation:   token,
+          expiresAt:         invite.expires_at,
+        });
+      }
+    } catch(emailErr) {
+      // L'email a échoué mais l'invitation est créée — on continue
+      console.error('Erreur envoi email invitation:', emailErr.message);
+    }
 
     return res.json({
       success: true,
       message: `Invitation envoyée à ${email}`,
       token,
-      invite: data,
+      invite,
     });
   } catch(err) {return res.status(500).json({error:err.message});}
 });
