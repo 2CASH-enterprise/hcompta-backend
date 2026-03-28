@@ -403,6 +403,7 @@ app.post('/invitations/envoyer', async (req,res) => {
     // Envoyer l'email selon le rôle
     try {
       const emailService = require('./services/email.service');
+      console.log(`📧 Envoi invitation ${role} à ${email}...`);
       if (role === 'EXPERT') {
         await emailService.envoyerInvitationCabinet({
           emailDestinataire: email,
@@ -418,9 +419,11 @@ app.post('/invitations/envoyer', async (req,res) => {
           expiresAt:         invite.expires_at,
         });
       }
+      console.log(`✅ Email invitation envoyé à ${email}`);
     } catch(emailErr) {
       // L'email a échoué mais l'invitation est créée — on continue
-      console.error('Erreur envoi email invitation:', emailErr.message);
+      console.error('❌ Erreur envoi email invitation:', emailErr.message);
+      console.error('❌ Détail:', emailErr.response?.data || emailErr.stack?.slice(0,200));
     }
 
     return res.json({
