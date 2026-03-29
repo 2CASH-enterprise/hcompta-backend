@@ -5,17 +5,40 @@ require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
 const supabase = require('./config/supabase');
+const { genererToken, authRequis, adminRequis, authOptionnel } = require('./middleware/auth.middleware');
 
 const app = express();
-app.use(cors());
+
+// ----------------------------------------------------------------
+// CORS — Restreint au domaine de production + dev local
+// ----------------------------------------------------------------
+const ORIGINES_AUTORISEES = [
+  'https://hcompta-ai.com',
+  'https://www.hcompta-ai.com',
+  'https://2cash-enterprise.github.io',
+  'http://localhost:8080',
+  'http://localhost:3000',
+  'http://127.0.0.1:8080',
+];
+app.use(cors({
+  origin: function(origin, callback) {
+    // Autoriser les requêtes sans origin (Postman, mobile, Render health check)
+    if (!origin) return callback(null, true);
+    if (ORIGINES_AUTORISEES.includes(origin)) return callback(null, true);
+    return callback(new Error('CORS non autorisé pour : ' + origin));
+  },
+  methods: ['GET','POST','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+  credentials: true,
+}));
 app.use(express.json());
 
 app.use('/api/pieces',     require('./routes/pieces.routes'));
 app.use('/api/tva',        require('./routes/tva.routes'));
 app.use('/api/export',     require('./routes/export.routes'));
-app.use('/api/mariah',     require('./routes/mariah.routes'));
-app.use('/api/traitement', require('./routes/traitement.routes'));
-app.use('/api/learning',   require('./routes/learning.routes'));
+app.use('/api/mariah',     authRequis, require('./routes/mariah.routes'));
+app.use('/api/traitement', authRequis, require('./routes/traitement.routes'));
+app.use('/api/learning',   authRequis, require('./routes/learning.routes'));
 
 // TVA par pays
 const TVA_PAR_PAYS = {
@@ -357,9 +380,46 @@ app.post('/connexion', async (req,res) => {
       const {data:cu} = await supabase.from('company_users').select('company_id,companies(id,company_name,country,plan,status,vat_rate)').eq('user_id',user.id).in('role_in_company',['OWNER','COLLABORATOR']).eq('status','active').single();
       company = cu?.companies||null;
     }
+    // Générer le JWT
+    const token = genererToken({
+      user_id:    user.id,
+      email:      user.email,
+      role:       user.role,
+      country:    user.country,
+      company_id: company?.id || null,
+    });
     const redirectMap = {PME_OWNER:'/dashboard-pme',COLLABORATOR:'/dashboard-pme',EXPERT:'/dashboard-expert',AMBASSADOR:'/dashboard-ambassadeur',ADMIN:'/dashboard-admin'};
-    return res.json({success:true,user_id:user.id,email:user.email,full_name:user.full_name,role:user.role,country:user.country,company,redirect:redirectMap[user.role]||'/dashboard-pme'});
+    return res.json({
+      success:   true,
+      token,                    // ← JWT retourné
+      user_id:   user.id,
+      email:     user.email,
+      full_name: user.full_name,
+      role:      user.role,
+      country:   user.country,
+      company,
+      redirect:  redirectMap[user.role]||'/dashboard-pme',
+    });
   } catch(err){return res.status(500).json({error:err.message});}
+});
+
+// ADMIN LOGIN — Authentification sécurisée dashboard admin
+app.post('/admin/login', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const ADMIN_CODE = process.env.ADMIN_CODE || 'hcompta2026admin';
+    if (!code || code !== ADMIN_CODE) {
+      return res.status(401).json({ error: 'Code admin incorrect' });
+    }
+    // Générer un token admin (durée 8h)
+    const token = genererToken({ role: 'ADMIN', email: 'admin@hcompta-ai.com' });
+    return res.json({ success: true, token });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ADMIN — Vérifier token valide
+app.get('/admin/verify', adminRequis, (req, res) => {
+  return res.json({ success: true, user: req.user });
 });
 
 // DEMANDE DEMO
