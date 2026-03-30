@@ -439,10 +439,18 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
     });
 
   } catch(err) {
+    // Log détaillé pour debug
+    console.error('❌ Pipeline erreur pièce', pieceId, ':');
+    console.error('   Message:', err.message);
+    if (err.response) {
+      console.error('   Status API:', err.response.status);
+      console.error('   Data API:', JSON.stringify(err.response.data).slice(0, 300));
+    }
+    console.error('   Pipeline étapes:', JSON.stringify(pipeline).slice(0, 500));
     try {
       await supabase.from('pieces').update({ status: 'error' }).eq('id', pieceId);
     } catch(e2) {}
-    return res.status(500).json({ error: err.message, pipeline });
+    return res.status(500).json({ error: err.message, detail: err.response?.data || null, pipeline });
   }
 });
 
