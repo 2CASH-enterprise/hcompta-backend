@@ -37,7 +37,7 @@ app.use('/api/pieces',     require('./routes/pieces.routes'));
 app.use('/api/tva',        require('./routes/tva.routes'));
 app.use('/api/export',     require('./routes/export.routes'));
 app.use('/api/mariah',     authRequis, require('./routes/mariah.routes'));
-app.use('/api/traitement', authRequis, require('./routes/traitement.routes'));
+app.use('/api/traitement', authOptionnel, require('./routes/traitement.routes'));
 app.use('/api/learning',   authRequis, require('./routes/learning.routes'));
 
 // TVA par pays
