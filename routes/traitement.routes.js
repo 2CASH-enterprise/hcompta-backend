@@ -61,7 +61,7 @@ async function appelClaude(systemPrompt, userMessages, maxTokens = 1500) {
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model:      'claude-sonnet-4-20250514',
+      model:      'claude-opus-4-6',
       max_tokens: maxTokens,
       system:     systemPrompt,
       messages:   [{ role: 'user', content: userMessages }],
