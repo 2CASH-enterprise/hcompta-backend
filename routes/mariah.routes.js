@@ -80,7 +80,7 @@ router.post('/', async (req, res) => {
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model:      'claude-sonnet-4-20250514',
+        model:      'claude-opus-4-6',
         max_tokens: 1500,
         system:     systemPrompt,
         messages,
@@ -111,7 +111,7 @@ router.post('/', async (req, res) => {
       success: true,
       reponse,
       role:    'assistant',
-      model:   'claude-sonnet-4-20250514',
+      model:   'claude-opus-4-6',
     });
 
   } catch(err) {
