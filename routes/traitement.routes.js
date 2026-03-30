@@ -100,15 +100,64 @@ function parseJSON(rawText) {
 
 // ----------------------------------------------------------------
 // HELPER : Télécharger le fichier en base64
+// Essaie d'abord via Supabase Storage (signed URL), puis via HTTP direct
 // ----------------------------------------------------------------
 async function getFileAsBase64(fileUrl) {
-  const response = await axios.get(fileUrl, {
-    responseType: 'arraybuffer',
-    timeout: 20000,
-  });
-  const base64      = Buffer.from(response.data).toString('base64');
-  const contentType = response.headers['content-type'] || 'application/pdf';
-  return { base64, contentType };
+  // Extraire le path depuis l'URL Supabase pour utiliser l'API storage
+  try {
+    // Méthode 1 : Extraire le chemin depuis l'URL et créer un signed URL
+    const urlObj = new URL(fileUrl);
+    const pathMatch = urlObj.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/pieces\/(.+)/);
+    
+    if (pathMatch) {
+      const filePath = decodeURIComponent(pathMatch[1].split('?')[0]);
+      console.log('📁 Téléchargement via Supabase Storage:', filePath.slice(0, 80));
+      
+      // Créer un signed URL valide 60 secondes
+      const { data: signedData, error: signErr } = await supabase.storage
+        .from('pieces')
+        .createSignedUrl(filePath, 60);
+      
+      if (!signErr && signedData?.signedUrl) {
+        const response = await axios.get(signedData.signedUrl, {
+          responseType: 'arraybuffer',
+          timeout: 30000,
+          headers: { 'Accept': 'application/pdf,image/*,*/*' }
+        });
+        
+        // Vérifier que c'est bien un PDF ou une image (pas du HTML d'erreur)
+        const contentType = response.headers['content-type'] || 'application/pdf';
+        if (contentType.includes('html')) {
+          throw new Error('Signed URL retourne HTML — fichier introuvable dans le bucket');
+        }
+        
+        const base64 = Buffer.from(response.data).toString('base64');
+        console.log('✅ Fichier téléchargé via signed URL, taille base64:', base64.length, 'contentType:', contentType);
+        return { base64, contentType };
+      }
+    }
+    
+    // Méthode 2 : Téléchargement direct depuis l'URL publique
+    console.log('📁 Téléchargement direct depuis URL:', fileUrl.slice(0, 80));
+    const response = await axios.get(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      headers: { 'Accept': 'application/pdf,image/*,*/*' }
+    });
+    
+    const contentType = response.headers['content-type'] || 'application/pdf';
+    if (contentType.includes('html')) {
+      throw new Error('URL retourne HTML — bucket probablement privé ou fichier introuvable');
+    }
+    
+    const base64 = Buffer.from(response.data).toString('base64');
+    console.log('✅ Fichier téléchargé direct, taille base64:', base64.length, 'contentType:', contentType);
+    return { base64, contentType };
+    
+  } catch(err) {
+    console.error('❌ Erreur téléchargement fichier:', err.message);
+    throw err;
+  }
 }
 
 function getMediaType(contentType, fileName) {
