@@ -52,8 +52,8 @@ const TVA_PAR_PAYS = {
   NE:{taux:19,label:'Niger',devise:'FCFA'},
   GA:{taux:18,label:'Gabon',devise:'FCFA'},
   CG:{taux:18,label:'Congo',devise:'FCFA'},
-  CD:{taux:16,label:'RD Congo',devise:'CDF'},
-  GN:{taux:18,label:'Guinée',devise:'GNF'},
+  CD:{taux:16,label:'RD Congo',devise:'USD'},
+  GN:{taux:18,label:'Guinée',devise:'EUR'},
 };
 const STATUTS_ALERTE = ['uploaded','error','processing'];
 const STATUT_TRAITE  = 'processed';
@@ -341,7 +341,13 @@ app.post('/inscription/pme', async (req,res) => {
       const {data:amb} = await supabase.from('ambassadors').select('id').eq('promo_code',code_promo.toUpperCase()).eq('status','active').single();
       if(amb) ambassadorId = amb.id;
     }
-    const planPrix = {tpe:12500,pme:25000,enterprise:75000};
+    // Prix selon devise du pays
+    const planPrixFCFA = {tpe:12500, pme:25000, enterprise:75000};
+    const planPrixUSD  = {tpe:20,    pme:40,    enterprise:150};
+    const planPrixEUR  = {tpe:19,    pme:38,    enterprise:140};
+    const planPrix = paysInfo.devise === 'USD' ? planPrixUSD
+                   : paysInfo.devise === 'EUR' ? planPrixEUR
+                   : planPrixFCFA;
     const montant  = planPrix[plan.toLowerCase()]||25000;
     const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate()+30);
     const {data:user,error:e1} = await supabase.from('users').insert([{email:email.toLowerCase(),full_name:full_name||company_name,phone:phone||null,role:'PME_OWNER',country:pays.toUpperCase()}]).select().single();
