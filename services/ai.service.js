@@ -4,7 +4,7 @@ async function analyzeDocument(fileUrl) {
   const response = await axios.post(
     'https://api.anthropic.com/v1/messages',
     {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-opus-4-6",
       messages: [
         {
           role: "user",
