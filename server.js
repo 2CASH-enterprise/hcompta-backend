@@ -153,6 +153,30 @@ app.post('/tva/generer/:companyId', (req, res) => {
 });
 
 // REPORTING
+// ── GET /ecritures/:companyId — Toutes les écritures d'une PME ──
+app.get('/ecritures/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { periode, journal } = req.query;
+    let query = supabase
+      .from('ecritures')
+      .select('id, journal, date_ecriture, compte, libelle, debit, credit, status, piece_id, tiers_id')
+      .eq('company_id', companyId)
+      .order('date_ecriture', { ascending: false })
+      .order('journal')
+      .limit(500);
+    if (periode) {
+      const debut = periode + '-01';
+      const fin   = new Date(new Date(debut).getFullYear(), new Date(debut).getMonth() + 1, 0).toISOString().slice(0, 10);
+      query = query.gte('date_ecriture', debut).lte('date_ecriture', fin);
+    }
+    if (journal) query = query.eq('journal', journal.toUpperCase());
+    const { data: ecritures, error, count } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, ecritures: ecritures || [], total: count || ecritures?.length || 0 });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/reporting/:companyId', async (req,res) => {
   try {
     const {data:ecritures,error} = await supabase.from('ecritures').select('compte,debit,credit').eq('company_id',req.params.companyId);
