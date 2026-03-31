@@ -335,6 +335,71 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
 
     pipeline.push({ etape: 2, code: codePromptJournal, statut: 'ok', ecritures_count: ecritures.length });
 
+    // ── ÉTAPE 2b : Détection tiers — substitution comptes génériques ──
+    // Récupérer tous les tiers de cette PME une seule fois
+    const tiersDetectes = [];
+    try {
+      const { data: tiersPME } = await supabase
+        .from('tiers')
+        .select('id, nom, type_tiers, racine_compte, compte_complet, aliases, nb_utilisations')
+        .eq('company_id', piece.company_id)
+        .eq('actif', true);
+
+      if (tiersPME && tiersPME.length > 0 && ecritures.length > 0) {
+        // Noms détectés dans le résumé et les libellés
+        const textesAnalyse = [
+          codification.resume || '',
+          ...ecritures.map(e => e.libelle || ''),
+        ].join(' ').toLowerCase();
+
+        // Map racine → type pour savoir quel type de compte chercher
+        const RACINE_TYPE = { '401': 'fournisseur', '411': 'client', '521': 'banque', '421': 'salarie' };
+
+        for (const tiers of tiersPME) {
+          const nomLower = tiers.nom.toLowerCase();
+          const aliases  = (tiers.aliases || []).map(a => a.toLowerCase());
+          const noms     = [nomLower, ...aliases];
+
+          // Vérifier si ce tiers est mentionné dans les textes
+          const trouve = noms.some(n => textesAnalyse.includes(n));
+          if (!trouve) continue;
+
+          const racine = tiers.racine_compte;
+
+          // Remplacer le compte générique (racine + '000') par le compte spécifique
+          let substitutions = 0;
+          ecritures = ecritures.map(e => {
+            const compteStr = String(e.compte || '');
+            // Compte générique = racine exacte + '000' (ex: 401000)
+            if (compteStr === racine + '000' || compteStr === racine) {
+              substitutions++;
+              return { ...e, compte: tiers.compte_complet, tiers_id: tiers.id, tiers_nom: tiers.nom };
+            }
+            return e;
+          });
+
+          if (substitutions > 0) {
+            tiersDetectes.push({
+              tiers_id:       tiers.id,
+              nom:            tiers.nom,
+              type:           tiers.type_tiers,
+              compte_generique: racine + '000',
+              compte_specifique: tiers.compte_complet,
+              substitutions,
+            });
+            // Incrémenter nb_utilisations
+            await supabase.from('tiers')
+              .update({ nb_utilisations: (tiers.nb_utilisations || 0) + 1, derniere_utilisation: new Date().toISOString() })
+              .eq('id', tiers.id);
+            console.log(`✅ Tiers détecté : ${tiers.nom} → ${tiers.compte_complet} (${substitutions} substitution(s))`);
+          }
+        }
+      }
+    } catch(eTiers) {
+      console.warn('⚠️ Détection tiers non bloquante :', eTiers.message);
+    }
+    pipeline.push({ etape: '2b', code: 'TIERS', statut: 'ok', tiers_detectes: tiersDetectes.length, details: tiersDetectes });
+
     // ── ÉTAPE 3 : PME-12 — Vérification TVA ──────────────────────
     // Seulement pour les journaux avec TVA (ACH, VTE)
     let alerteTVA = null;
@@ -418,6 +483,7 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
         libelle:       String(e.libelle || ''),
         debit:         Math.max(0, Number(e.debit  || 0)),
         credit:        Math.max(0, Number(e.credit || 0)),
+        tiers_id:      e.tiers_id || null,
         status:        'generated',
       }));
 
@@ -482,6 +548,7 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
       },
       ecritures_count:     ecritures.length,
       ecritures,
+      tiers_detectes,
       few_shot_count:      exemplesFewShot.length,
       apprentissage_actif: exemplesFewShot.length > 0,
       prompts_utilises:    ['PME-01', codePromptJournal, 'PME-12', 'PME-13'].filter(Boolean),
