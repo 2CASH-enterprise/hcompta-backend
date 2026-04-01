@@ -537,15 +537,84 @@ app.get('/invitations/:companyId', async (req,res) => {
 });
 
 // BLOG
-app.get('/blog', async (req,res) => {
+// ── GET /blog — Articles publiés (landing page + blog index) ──
+app.get('/blog', async (req, res) => {
   try {
-    const {country} = req.query;
-    let query = supabase.from('blog_posts').select('id,title,slug,excerpt,cover_image_url,country,published_at').eq('is_published',true).order('published_at',{ascending:false}).limit(10);
-    if(country) query = query.or(`country.eq.${country},country.is.null`);
-    const {data,error} = await query;
-    if(error) return res.status(500).json({error:error.message});
-    return res.json(data||[]);
-  } catch(err){return res.status(500).json({error:err.message});}
+    const { country, limit = 10, offset = 0, category } = req.query;
+    let query = supabase
+      .from('blog_posts')
+      .select('id,title,slug,excerpt,cover_image_url,country,category,published_at,author,views,keywords')
+      .eq('is_published', true)
+      .order('published_at', { ascending: false })
+      .range(Number(offset), Number(offset) + Number(limit) - 1);
+    if (country && country !== 'ALL') query = query.or(`country.eq.${country},country.eq.ALL`);
+    if (category) query = query.eq('category', category);
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, articles: data || [], total: data?.length || 0 });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /blog/:slug — Article individuel complet (page SEO) ──
+app.get('/blog/:slug', async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { data, error } = await supabase
+      .from('blog_posts')
+      .select('*')
+      .eq('slug', slug)
+      .eq('is_published', true)
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'Article non trouvé' });
+    // Incrémenter les vues
+    await supabase.from('blog_posts').update({ views: (data.views || 0) + 1 }).eq('id', data.id);
+    return res.json({ success: true, article: data });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/blog — Créer un article (admin) ─────────────────
+app.post('/api/blog', async (req, res) => {
+  try {
+    const { title, slug, excerpt, content, meta_title, meta_description, keywords,
+            country, category, cover_image_url, is_published, author } = req.body;
+    if (!title || !slug) return res.status(400).json({ error: 'title et slug obligatoires' });
+    const { data, error } = await supabase.from('blog_posts').insert([{
+      title, slug: slug.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+      excerpt, content, meta_title, meta_description,
+      keywords: keywords || [],
+      country: country || 'ALL',
+      category: category || 'Comptabilité',
+      cover_image_url: cover_image_url || null,
+      is_published: is_published || false,
+      published_at: is_published ? new Date().toISOString() : null,
+      author: author || 'H-Compta AI',
+    }]).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.status(201).json({ success: true, article: data });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── PATCH /api/blog/:id — Modifier un article (admin) ─────────
+app.patch('/api/blog/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = { ...req.body };
+    if (updates.is_published === true && !updates.published_at) {
+      updates.published_at = new Date().toISOString();
+    }
+    const { data, error } = await supabase.from('blog_posts').update(updates).eq('id', id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, article: data });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── DELETE /api/blog/:id — Supprimer un article (admin) ───────
+app.delete('/api/blog/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('blog_posts').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 3000;
