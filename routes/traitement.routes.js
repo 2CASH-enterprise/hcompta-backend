@@ -81,9 +81,18 @@ async function appelClaude(systemPrompt, userMessages, maxTokens = 1000, retries
           model,
           max_tokens: Math.min(maxTokens, 2000), // Cap à 2000 tokens max
           system:     systemPrompt,
-          messages:   Array.isArray(userMessages)
-            ? userMessages
-            : [{ role: 'user', content: userMessages }],
+          messages: (function() {
+            // Si c'est déjà un tableau de messages avec role → utiliser tel quel
+            if (Array.isArray(userMessages) && userMessages.length > 0 && userMessages[0].role) {
+              return userMessages;
+            }
+            // Si c'est un tableau de blocs content (image, document, text) → envelopper
+            if (Array.isArray(userMessages)) {
+              return [{ role: 'user', content: userMessages }];
+            }
+            // String simple → envelopper
+            return [{ role: 'user', content: userMessages }];
+          })(),
         },
         {
           headers: {
