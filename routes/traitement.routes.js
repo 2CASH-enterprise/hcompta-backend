@@ -32,7 +32,7 @@ const JOURNAL_TO_PROMPT = {
 // ----------------------------------------------------------------
 const promptCache = {};
 async function getPrompt(code, pays) {
-  const cacheKey = `${code}_${pays}`;
+  const cacheKey = code + '_' + (pays || 'ALL');
   if (promptCache[cacheKey]) return promptCache[cacheKey];
   try {
     const { data } = await supabase
@@ -57,25 +57,68 @@ async function getPrompt(code, pays) {
 // ----------------------------------------------------------------
 // HELPER : Appel Claude API générique
 // ----------------------------------------------------------------
-async function appelClaude(systemPrompt, userMessages, maxTokens = 1500) {
-  const response = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    {
-      model:      'claude-opus-4-6',
-      max_tokens: maxTokens,
-      system:     systemPrompt,
-      messages:   [{ role: 'user', content: userMessages }],
-    },
-    {
-      headers: {
-        'x-api-key':         process.env.CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'Content-Type':      'application/json',
-      },
-      timeout: 60000,
+// Délai entre appels pour respecter la limite 30 000 tokens/minute
+let lastApiCall = 0;
+const MIN_INTERVAL_MS = 3000; // 3s minimum entre appels
+
+async function appelClaude(systemPrompt, userMessages, maxTokens = 1000, retries = 3, modelOverride = null) {
+  // Respecter le délai minimum entre appels (anti-rate-limit)
+  const now = Date.now();
+  const elapsed = now - lastApiCall;
+  if (elapsed < MIN_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, MIN_INTERVAL_MS - elapsed));
+  }
+  lastApiCall = Date.now();
+
+  // Choisir le modèle — Haiku pour étapes légères (identification, score)
+  const model = modelOverride || process.env.CLAUDE_MODEL || 'claude-opus-4-6';
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model,
+          max_tokens: Math.min(maxTokens, 2000), // Cap à 2000 tokens max
+          system:     systemPrompt,
+          messages:   Array.isArray(userMessages)
+            ? userMessages
+            : [{ role: 'user', content: userMessages }],
+        },
+        {
+          headers: {
+            'x-api-key':         process.env.CLAUDE_API_KEY,
+            'anthropic-version': '2023-06-01',
+            'Content-Type':      'application/json',
+          },
+          timeout: 90000,
+        }
+      );
+      return response.data?.content?.[0]?.text || '';
+    } catch (err) {
+      const status  = err.response?.status;
+      const isRate  = status === 429;
+      const isLoad  = status === 529;
+      const errData = err.response?.data?.error;
+
+      if ((isRate || isLoad) && attempt < retries) {
+        // Backoff exponentiel : 10s, 30s, 60s
+        const waitMs = isRate ? [10000, 30000, 60000][attempt] || 60000 : 5000;
+        console.warn(`⚠️ Anthropic ${status} (${errData?.type || ''}) — attente ${waitMs/1000}s (tentative ${attempt+1}/${retries})`);
+        await new Promise(r => setTimeout(r, waitMs));
+        lastApiCall = Date.now();
+        continue;
+      }
+
+      if (isRate) {
+        throw new Error(`Rate limit 429 — Limite tokens/minute dépassée. Réessayez dans 1 minute.`);
+      }
+      if (status === 401) {
+        throw new Error('Clé API Anthropic invalide — vérifiez CLAUDE_API_KEY sur Render.');
+      }
+      throw err;
     }
-  );
-  return response.data?.content?.[0]?.text || '';
+  }
 }
 
 // ----------------------------------------------------------------
@@ -84,8 +127,8 @@ async function appelClaude(systemPrompt, userMessages, maxTokens = 1500) {
 function parseJSON(rawText) {
   try {
     const cleaned = rawText
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
+      .replace(/'''json\n?/g, '')
+      .replace(/'''\n?/g, '')
       .trim();
     return JSON.parse(cleaned);
   } catch(e) {
@@ -190,7 +233,7 @@ function buildUserContent(base64, mediaType, texte) {
 function substituerVariables(prompt, vars) {
   let result = prompt;
   for (const [key, val] of Object.entries(vars)) {
-    result = result.replace(new RegExp(`{{${key}}}`, 'g'), val || '');
+    result = result.replace(new RegExp('{{' + (key) + '}}', 'g'), val || '');
   }
   return result;
 }
@@ -200,7 +243,7 @@ function substituerVariables(prompt, vars) {
 // ----------------------------------------------------------------
 const fewShotCache = {};
 async function getFewShotExemples(journal, pays, limit = 3) {
-  const cacheKey = `${journal}_${pays}`;
+  const cacheKey = journal + '_' + (pays || 'ALL');
   if (fewShotCache[cacheKey]) return fewShotCache[cacheKey];
   try {
     const { data } = await supabase
@@ -232,14 +275,17 @@ async function getFewShotExemples(journal, pays, limit = 3) {
 
 function buildFewShotBlock(exemples) {
   if (!exemples || !exemples.length) return '';
-  const lines = exemples.map((ex, i) => {
-    const ecrs = (ex.ecritures || [])
-      .map(e => `    {"compte":"${e.compte}","libelle":"${e.libelle}","debit":${e.debit},"credit":${e.credit}}`)
-      .join(',\n');
-    return `EXEMPLE VALIDÉ ${i+1} (${ex.type_piece||'pièce'} · Journal ${ex.journal||'OD'}) :\n{\n  "type_piece":"${ex.type_piece||'autre'}",\n  "journal":"${ex.journal||'OD'}",\n  "ecritures":[\n${ecrs}\n  ]\n}`;
+  var lines = exemples.map(function(ex, i) {
+    var ecrs = (ex.ecritures || []).map(function(e) {
+      return '    {"compte":"' + (e.compte||'') + '","libelle":"' + (e.libelle||'') + '","debit":' + (e.debit||0) + ',"credit":' + (e.credit||0) + '}';
+    }).join(',\n');
+    var header = 'EXEMPLE VALIDE ' + (i+1) + ' (' + (ex.type_piece||'piece') + ' Journal ' + (ex.journal||'OD') + ') :';
+    var body = '{"type_piece":"' + (ex.type_piece||'autre') + '","journal":"' + (ex.journal||'OD') + '","ecritures":[' + ecrs + ']}';
+    return header + '\n' + body;
   }).join('\n---\n');
-  return `\n\nEXEMPLES RÉELS VALIDÉS PAR LE CABINET (utilise-les comme référence exacte) :\n${lines}\n\nFin des exemples. Génère maintenant les écritures pour la pièce soumise.\n`;
+  return '\n\nEXEMPLES VALIDES PAR LE CABINET :\n' + lines + '\n\nGenere les ecritures pour la piece soumise.\n';
 }
+
 
 // ================================================================
 // PIPELINE PRINCIPAL : POST /api/traitement/piece/:pieceId
@@ -281,7 +327,7 @@ router.post('/piece/:pieceId', async (req, res) => {
     const rawEtape1 = await appelClaude(
       promptPME01,
       buildUserContent(base64, mediaType, 'Identifie cette pièce comptable. Réponds uniquement en JSON.'),
-      500
+      300
     );
 
     const identification = parseJSON(rawEtape1) || {};
@@ -321,8 +367,7 @@ router.post('/piece/:pieceId', async (req, res) => {
       promptJournal += buildFewShotBlock(exemplesFewShot);
     }
 
-    const texteEtape2 = `Type de pièce identifié : ${typePiece} | Journal : ${journal}
-Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEMENT en JSON.`;
+    const texteEtape2 = 'Type de pièce : ' + typePiece + ' | Journal : ' + journal + ' | Génère les écritures SYSCOHADA complètes. Réponds UNIQUEMENT en JSON.';
 
     const rawEtape2 = await appelClaude(
       promptJournal,
@@ -336,8 +381,8 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
     pipeline.push({ etape: 2, code: codePromptJournal, statut: 'ok', ecritures_count: ecritures.length });
 
     // ── ÉTAPE 2b : Détection tiers — substitution comptes génériques ──
-    // Récupérer tous les tiers de cette PME une seule fois
-    const tiersDetectes = [];
+    // let HORS du try pour que tiersDetectes soit accessible même si exception
+    let tiersDetectes = [];
     try {
       const { data: tiersPME } = await supabase
         .from('tiers')
@@ -391,7 +436,7 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
             await supabase.from('tiers')
               .update({ nb_utilisations: (tiers.nb_utilisations || 0) + 1, derniere_utilisation: new Date().toISOString() })
               .eq('id', tiers.id);
-            console.log(`✅ Tiers détecté : ${tiers.nom} → ${tiers.compte_complet} (${substitutions} substitution(s))`);
+            console.log('Tiers detecte : ' + tiers.nom + ' -> ' + tiers.compte_complet + ' (' + substitutions + ' substitution(s))');
           }
         }
       }
@@ -453,7 +498,7 @@ Génère les écritures SYSCOHADA complètes pour cette pièce. Réponds UNIQUEM
 
       const rawScore = await appelClaude(
         promptScore,
-        [{ type: 'text', text: `Attribue un score de confiance à cette écriture :\n${contexteScore}\nRéponds uniquement en JSON avec score, statut, raisons_penalite, action_requise.` }],
+        [{ type: 'text', text: 'Attribue un score de confiance à cette écriture :\n' + (contexteScore) + '\nRéponds uniquement en JSON avec score, statut, raisons_penalite, action_requise.' }],
         300
       );
 
@@ -590,7 +635,7 @@ router.post('/batch/:companyId', async (req, res) => {
     if (!pieces || !pieces.length) return res.json({ message: 'Aucune pièce en attente', traites: 0 });
 
     res.json({
-      message:   `Pipeline lancé pour ${pieces.length} pièce(s)`,
+      message:   'Pipeline lancé pour ' + (pieces.length) + ' pièce(s)',
       piece_ids: pieces.map(p => p.id),
       traites:   pieces.length,
     });
@@ -599,13 +644,13 @@ router.post('/batch/:companyId', async (req, res) => {
     for (const piece of pieces) {
       try {
         await axios.post(
-          `http://localhost:${process.env.PORT || 3000}/api/traitement/piece/${piece.id}`,
+          'http://localhost:' + (process.env.PORT || 3000) + '/api/traitement/piece/' + piece.id,
           {},
           { timeout: 120000 }
         );
         await new Promise(r => setTimeout(r, 1500));
       } catch(e) {
-        console.error(`Erreur pièce ${piece.id}:`, e.message);
+        console.error('Erreur pièce ' + (piece.id) + ':', e.message);
       }
     }
   } catch(err) {
