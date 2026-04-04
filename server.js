@@ -128,12 +128,12 @@ app.post('/pieces/upload', upload.single('file'), async (req,res) => {
     const ts = Date.now();
     const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g,'_');
     const path = `${company_id}/${ts}_${safeName}`;
-    const {error:sErr} = await supabase.storage.from('pieces').upload(path,file.buffer,{contentType:file.mimetype,upsert:false});
+    const {error:sErr} = await supabase.storage.from('pieces').upload(path,file.buffer,{contentType:file.mimetype,upsert:true});
     if(sErr) return res.status(500).json({error:'Stockage: '+sErr.message});
     const {data:urlData} = supabase.storage.from('pieces').getPublicUrl(path);
     const fileUrl = urlData?.publicUrl||path;
     const {data:piece,error:dErr} = await supabase.from('pieces')
-      .insert([{company_id,uploaded_by:uploaded_by||'1d085e85-dfe2-46db-82d2-b7a57b7afc2a',file_url:fileUrl,file_name:file.originalname,status:'uploaded'}])
+      .insert([{company_id,uploaded_by:uploaded_by||null,file_url:fileUrl,file_name:file.originalname,status:'uploaded'}])
       .select().single();
     if(dErr) return res.status(500).json({error:dErr.message});
     return res.status(201).json({message:'Pièce importée avec succès',piece});
