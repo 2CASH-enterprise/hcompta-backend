@@ -541,10 +541,23 @@ router.post('/piece/:pieceId', async (req, res) => {
         status:        'generated',
       }));
 
-      const { error: eErr } = await supabase.from('ecritures').insert(lignes);
-      if (eErr) {
+      let insertResult = await supabase.from('ecritures').insert(lignes);
+      
+      // Si erreur avec tiers_id → réessayer sans (colonne peut ne pas exister)
+      if (insertResult.error) {
+        console.warn('⚠️ Insertion écritures erreur (tentative 1):', insertResult.error.message);
+        // Retirer tiers_id et réessayer
+        const lignesSansTiers = lignes.map(l => {
+          const { tiers_id, ...rest } = l;
+          return rest;
+        });
+        insertResult = await supabase.from('ecritures').insert(lignesSansTiers);
+      }
+
+      if (insertResult.error) {
+        console.error('❌ Insertion écritures erreur finale:', insertResult.error.message);
         await supabase.from('pieces').update({ status: 'error' }).eq('id', pieceId);
-        return res.status(500).json({ error: 'Erreur insertion écritures : ' + eErr.message });
+        return res.status(500).json({ error: 'Erreur insertion écritures : ' + insertResult.error.message });
       }
     }
 
@@ -578,6 +591,8 @@ router.post('/piece/:pieceId', async (req, res) => {
         journal,
         score_confiance: scoreConfiance,
         processed_at:    new Date().toISOString(),
+        resume_ia:       codification.resume || identification.raison || null,
+        montant_ttc:     codification.extraction?.montant_ttc || codification.montant_ttc || null,
       })
       .eq('id', pieceId)
       .select()
