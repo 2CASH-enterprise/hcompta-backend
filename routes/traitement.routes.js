@@ -561,6 +561,23 @@ router.post('/piece/:pieceId', async (req, res) => {
       }
     }
 
+    // ── Classifier les alertes par destinataire ─────────────────
+    // ADMIN : erreurs système (BDD, API, infrastructure)
+    // PME   : erreurs métier (score faible, TVA, équilibre)
+    // EXPERT: anomalies comptables à vérifier
+    const alertesMetier = [];
+    const alertesSystème = [];
+
+    if (!equilibre) {
+      alertesMetier.push({ code: 'DESEQUILIBRE', msg: 'Écritures déséquilibrées — vérification requise', destinataire: 'PME_EXPERT' });
+    }
+    if (alerteTVA) {
+      alertesMetier.push({ code: 'ALERTE_TVA', msg: 'Écart TVA détecté — ' + (alerteTVA.alerte || ''), destinataire: 'PME_EXPERT' });
+    }
+    if (scoreConfiance < 70) {
+      alertesMetier.push({ code: 'SCORE_FAIBLE', msg: 'Score de confiance faible (' + scoreConfiance + '%) — révision conseillée', destinataire: 'PME_EXPERT' });
+    }
+
     // Logger dans prompt_logs
     await supabase.from('prompt_logs').insert([{
       prompt_code:    'analyse_piece',
@@ -575,9 +592,11 @@ router.post('/piece/:pieceId', async (req, res) => {
       output_payload: {
         identification,
         codification,
-        alerte_tva:  alerteTVA,
-        score:       scoreConfiance,
+        alerte_tva:       alerteTVA,
+        score:            scoreConfiance,
         equilibre,
+        alertes_metier:   alertesMetier,
+        alertes_systeme:  alertesSystème,
       },
       score: scoreConfiance,
     }]);
@@ -618,6 +637,7 @@ router.post('/piece/:pieceId', async (req, res) => {
       ecritures_count:     ecritures.length,
       ecritures,
       tiers_detectes,
+      alertes_metier,
       few_shot_count:      exemplesFewShot.length,
       apprentissage_actif: exemplesFewShot.length > 0,
       prompts_utilises:    ['PME-01', codePromptJournal, 'PME-12', 'PME-13'].filter(Boolean),
