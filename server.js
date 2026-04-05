@@ -295,6 +295,52 @@ app.get('/cabinet/invitations/:email', async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
+// INVITATIONS — accepter / refuser
+app.post('/invitations/accepter', async (req, res) => {
+  try {
+    const { invite_id, expert_user_id } = req.body;
+    if (!invite_id || !expert_user_id) return res.status(400).json({ error: 'invite_id et expert_user_id obligatoires' });
+
+    // Récupérer l'invitation
+    const { data: invite, error: eInv } = await supabase
+      .from('invites')
+      .select('id, company_id, email, role, status, expires_at')
+      .eq('id', invite_id)
+      .single();
+
+    if (eInv || !invite) return res.status(404).json({ error: 'Invitation introuvable' });
+    if (invite.status !== 'pending') return res.status(409).json({ error: 'Invitation déjà traitée' });
+    if (new Date(invite.expires_at) < new Date()) return res.status(410).json({ error: 'Invitation expirée' });
+
+    // Créer le lien company_users (EXPERT ↔ PME)
+    const { error: eCU } = await supabase.from('company_users').insert([{
+      company_id:       invite.company_id,
+      user_id:          expert_user_id,
+      role_in_company:  invite.role || 'EXPERT',
+      status:           'active',
+      invited_by:       null,
+    }]);
+
+    if (eCU && !eCU.message.includes('duplicate')) {
+      return res.status(500).json({ error: 'Erreur création lien : ' + eCU.message });
+    }
+
+    // Mettre à jour le statut de l'invitation
+    await supabase.from('invites').update({ status: 'accepted' }).eq('id', invite_id);
+
+    return res.json({ success: true, message: 'Invitation acceptée — PME ajoutée à votre portefeuille', company_id: invite.company_id });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/invitations/refuser', async (req, res) => {
+  try {
+    const { invite_id } = req.body;
+    if (!invite_id) return res.status(400).json({ error: 'invite_id obligatoire' });
+    await supabase.from('invites').update({ status: 'declined' }).eq('id', invite_id);
+    return res.json({ success: true, message: 'Invitation refusée' });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 // AMBASSADEUR
 app.get('/ambassadeur/stats/:userId', async (req,res) => {
   try {
