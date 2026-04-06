@@ -328,23 +328,26 @@ router.post('/piece/:pieceId', async (req, res) => {
     const mediaType = getMediaType(contentType, piece.file_name);
 
     // ── ÉTAPE 1 : PME-01 — Identification de la pièce ───────────
-    pipeline.push({ etape: 1, code: 'PME-01', statut: 'start' });
+    // Optimisation : détecter le type depuis le nom de fichier si possible
+    const nomLower = (piece.file_name || '').toLowerCase();
+    let typePieceEvident = null;
+    let journalEvident   = null;
+    if (nomLower.includes('facture') && (nomLower.includes('achat') || nomLower.includes('fournisseur') || nomLower.includes('honoraire'))) {
+      typePieceEvident = 'facture_achat'; journalEvident = 'ACH';
+    } else if (nomLower.includes('facture') && (nomLower.includes('vente') || nomLower.includes('client'))) {
+      typePieceEvident = 'facture_vente'; journalEvident = 'VTE';
+    } else if (nomLower.includes('releve') || nomLower.includes('relevé') || nomLower.includes('bancaire')) {
+      typePieceEvident = 'releve_bancaire'; journalEvident = 'BAN';
+    } else if (nomLower.includes('recu') || nomLower.includes('reçu') || nomLower.includes('caisse')) {
+      typePieceEvident = 'recu'; journalEvident = 'CAI';
+    }
 
-    const promptPME01 = await getPrompt('PME-01', pays)
-      || 'Identifie le type de pièce et le journal SYSCOHADA. Réponds en JSON avec type_piece, journal, sens, confiance_identification.';
+    pipeline.push({ etape: 1, code: 'PME-01', statut: typePieceEvident ? 'skip-nom-fichier' : 'start' });
 
-    const rawEtape1 = await appelClaude(
-      promptPME01,
-      buildUserContent(base64, mediaType, 'Identifie cette pièce comptable. Réponds uniquement en JSON.'),
-      300
-    );
+    // promptPME01 chargé dans le bloc conditionnel ci-dessous
 
-    const identification = parseJSON(rawEtape1) || {};
-    const journal = JOURNAUX.includes(identification.journal) ? identification.journal : 'OD';
-    const typePiece = identification.type_piece || 'autre';
-    const confiance = identification.confiance_identification || 'MOYENNE';
-
-    pipeline.push({ etape: 1, code: 'PME-01', statut: 'ok', journal, typePiece, confiance });
+    // Appel IA PME-01 (dans le bloc conditionnel ci-dessus)
+    // Les variables journal, typePiece, confiance sont déjà définies
 
     // ── ÉTAPE 2 : PME-XX — Codification selon journal ────────────
     pipeline.push({ etape: 2, code: JOURNAL_TO_PROMPT[journal] || 'PME-10', statut: 'start' });
@@ -371,7 +374,7 @@ router.post('/piece/:pieceId', async (req, res) => {
     });
 
     // Enrichir avec les exemples validés (few-shot learning)
-    const exemplesFewShot = await getFewShotExemples(journal, pays, 3);
+    const exemplesFewShot = await getFewShotExemples(journal, pays, 2); // Max 2 exemples — économie tokens
     if (exemplesFewShot.length > 0) {
       promptJournal += buildFewShotBlock(exemplesFewShot);
     }
@@ -381,7 +384,9 @@ router.post('/piece/:pieceId', async (req, res) => {
     const rawEtape2 = await appelClaude(
       promptJournal,
       buildUserContent(base64, mediaType, texteEtape2),
-      2000
+      1500,  // Réduit de 2000 à 1500 tokens
+      3,
+      MODELE_CODIFICATION  // Sonnet — tâche complexe
     );
 
     const codification = parseJSON(rawEtape2) || {};
@@ -467,10 +472,20 @@ router.post('/piece/:pieceId', async (req, res) => {
           taux_tva:    String(tva),
         });
 
+        // PME-12 : utiliser les écritures déjà générées — pas besoin de re-envoyer le PDF
+        const contexteTVA = JSON.stringify({
+          ecritures: ecritures.slice(0, 8),
+          type_piece: typePiece,
+          journal,
+          pays_client: pays,
+          taux_tva: tva,
+        });
         const rawTVA = await appelClaude(
           promptTVASubs,
-          buildUserContent(base64, mediaType, 'Vérifie la TVA de cette pièce. Réponds uniquement en JSON avec soumis_tva, tva_calculee, tva_deductible, alerte_ecart.'),
-          400
+          [{ type: 'text', text: 'Vérifie la TVA sur ces écritures SYSCOHADA :\n' + contexteTVA + '\nRéponds uniquement en JSON avec soumis_tva, tva_calculee, tva_deductible, alerte_ecart.' }],
+          300,  // Réduit : réponse courte
+          2,
+          MODELE_TVA  // Haiku — calcul TVA simple
         );
 
         const verificationTVA = parseJSON(rawTVA);
@@ -491,8 +506,9 @@ router.post('/piece/:pieceId', async (req, res) => {
 
     let scoreConfiance = codification.score_confiance || 75;
 
+    {
     const promptScore = await getPrompt('PME-13', pays);
-    if (promptScore && ecritures.length > 0) {
+    if (!casFacile && promptScore && ecritures.length > 0) {
       const contexteScore = JSON.stringify({
         type_piece:   typePiece,
         journal,
@@ -508,7 +524,9 @@ router.post('/piece/:pieceId', async (req, res) => {
       const rawScore = await appelClaude(
         promptScore,
         [{ type: 'text', text: 'Attribue un score de confiance à cette écriture :\n' + (contexteScore) + '\nRéponds uniquement en JSON avec score, statut, raisons_penalite, action_requise.' }],
-        300
+        150,  // Réduit : réponse score courte
+        2,
+        MODELE_SCORE  // Haiku — calcul score simple
       );
 
       const scoring = parseJSON(rawScore);
@@ -516,6 +534,7 @@ router.post('/piece/:pieceId', async (req, res) => {
         scoreConfiance = Math.min(100, Math.max(0, scoring.score));
       }
       pipeline.push({ etape: 4, code: 'PME-13', statut: 'ok', score: scoreConfiance });
+    }
     }
 
     // ── FINAL : Validation équilibre et insertion ─────────────────
