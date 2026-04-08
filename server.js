@@ -558,9 +558,20 @@ app.post('/invitations/envoyer', async (req,res) => {
       }
       console.log(`✅ Email invitation envoyé à ${email}`);
     } catch(emailErr) {
-      // L'email a échoué mais l'invitation est créée — on continue
-      console.error('❌ Erreur envoi email invitation:', emailErr.message);
-      console.error('❌ Détail:', emailErr.response?.data || emailErr.stack?.slice(0,200));
+      // L'email a échoué — logger le détail complet pour diagnostic
+      const errDetail = emailErr.response?.data || emailErr.message || 'Erreur inconnue';
+      console.error('❌ BREVO ERREUR INVITATION:', JSON.stringify(errDetail));
+      console.error('❌ Status:', emailErr.response?.status);
+      console.error('❌ BREVO_API_KEY définie:', !!process.env.BREVO_API_KEY);
+      console.error('❌ BREVO_FROM_EMAIL:', process.env.BREVO_FROM_EMAIL || 'NON DÉFINI');
+      // Logger dans Supabase pour consultation depuis l'admin
+      await supabase.from('prompt_logs').insert([{
+        prompt_code: 'email_error',
+        company_id:  company_id,
+        input_payload: { type: 'invitation', email, role },
+        output_payload: { error: String(errDetail), status: emailErr.response?.status || 0 },
+        score: 0,
+      }]).catch(() => {});
     }
 
     return res.json({
@@ -917,4 +928,12 @@ app.post('/reporting/envoyer-rapport', async (req, res) => {
 
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`H-Compta AI Backend running on port ${PORT} 🚀`));
+app.listen(PORT, () => {
+  console.log(`H-Compta AI Backend running on port ${PORT} 🚀`);
+  // Vérification des variables critiques au démarrage
+  const critiques = ['BREVO_API_KEY','BREVO_FROM_EMAIL','CLAUDE_API_KEY','SUPABASE_URL','SUPABASE_KEY'];
+  critiques.forEach(v => {
+    if (!process.env[v]) console.warn(`⚠️  Variable manquante : ${v}`);
+    else console.log(`✅ ${v} : configurée`);
+  });
+});
