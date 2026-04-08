@@ -928,6 +928,49 @@ app.post('/reporting/envoyer-rapport', async (req, res) => {
 
 
 const PORT = process.env.PORT || 3000;
+// ── ROUTE TEST EMAIL — diagnostic Brevo ─────────────────────
+app.post('/api/admin/test-email', async (req, res) => {
+  try {
+    const { email_dest } = req.body;
+    if (!email_dest) return res.status(400).json({ error: 'email_dest obligatoire' });
+
+    // Vérifier les variables d'env
+    const config = {
+      BREVO_API_KEY:   process.env.BREVO_API_KEY ? '✅ Définie (' + process.env.BREVO_API_KEY.slice(0,8) + '...)' : '❌ MANQUANTE',
+      BREVO_FROM_EMAIL: process.env.BREVO_FROM_EMAIL || '❌ MANQUANTE (défaut: noreply@hcompta-ai.com)',
+      BREVO_FROM_NAME:  process.env.BREVO_FROM_NAME  || '❌ MANQUANTE (défaut: H-Compta AI)',
+    };
+
+    if (!process.env.BREVO_API_KEY) {
+      return res.status(500).json({ error: 'BREVO_API_KEY non configurée sur Render', config });
+    }
+
+    // Tenter l'envoi d'un email de test
+    const emailService = require('./services/email.service');
+    await emailService.envoyerEmail({
+      to:          email_dest,
+      subject:     '[H-Compta AI] Email de test — ' + new Date().toLocaleString('fr-FR'),
+      htmlContent: '<div style="font-family:Arial,sans-serif;max-width:500px;margin:32px auto;padding:24px;background:#F2FAF6;border-radius:12px">'
+        + '<h2 style="color:#0D2B22">✅ Email de test H-Compta AI</h2>'
+        + '<p style="color:#2D3A35">Brevo fonctionne correctement. Cet email confirme que votre configuration est opérationnelle.</p>'
+        + '<p style="font-size:12px;color:#9DB8AC">Envoyé depuis Render · ' + new Date().toISOString() + '</p></div>',
+    });
+
+    return res.json({ success: true, message: 'Email de test envoyé à ' + email_dest, config });
+  } catch(err) {
+    const detail = err.response?.data || err.message;
+    return res.status(500).json({
+      error:   'Échec envoi Brevo',
+      detail:  JSON.stringify(detail),
+      status:  err.response?.status,
+      config: {
+        BREVO_API_KEY:   process.env.BREVO_API_KEY ? '✅ Définie' : '❌ MANQUANTE',
+        BREVO_FROM_EMAIL: process.env.BREVO_FROM_EMAIL || 'non définie',
+      }
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`H-Compta AI Backend running on port ${PORT} 🚀`);
   // Vérification des variables critiques au démarrage
