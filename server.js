@@ -39,6 +39,7 @@ app.use('/api/export',     require('./routes/export.routes'));
 app.use('/api/mariah',     authRequis, require('./routes/mariah.routes'));
 app.use('/api/traitement', authOptionnel, require('./routes/traitement.routes'));
 app.use('/api/learning',   authRequis, require('./routes/learning.routes'));
+app.use('/api/tiers',      authOptionnel, require('./routes/tiers.routes'));
 
 // TVA par pays
 const TVA_PAR_PAYS = {
@@ -662,6 +663,258 @@ app.delete('/api/blog/:id', async (req, res) => {
     return res.json({ success: true });
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
+
+// ================================================================
+// REPORTING MENSUEL — Balance, Résultat, Trésorerie
+// ================================================================
+
+// Helper : dates de début/fin d'un mois
+function moisVersDateRange(periode) {
+  // periode = "2026-03"
+  const [year, month] = periode.split('-').map(Number);
+  const debut = new Date(year, month - 1, 1).toISOString().slice(0, 10);
+  const fin   = new Date(year, month, 0).toISOString().slice(0, 10);
+  return { debut, fin };
+}
+
+// Helper : 3 périodes glissantes depuis une période donnée
+function troisMoisGlissants(periode) {
+  const [year, month] = periode.split('-').map(Number);
+  const mois = [];
+  for (let i = 2; i >= 0; i--) {
+    let m = month - i;
+    let y = year;
+    if (m <= 0) { m += 12; y -= 1; }
+    mois.push(`${y}-${String(m).padStart(2,'0')}`);
+  }
+  return mois; // ["2026-01","2026-02","2026-03"]
+}
+
+// Helper : libellé SYSCOHADA d'un compte
+function libelleCompte(compte) {
+  const c = String(compte || '');
+  const map = {
+    '101':'Capital','106':'Réserves','111':'Report à nouveau',
+    '161':'Emprunts','401':'Fournisseurs','411':'Clients',
+    '421':'Personnel','431':'Sécurité sociale','441':'État impôts',
+    '445':'TVA','521':'Banques','531':'Chèques','571':'Caisse',
+    '601':'Achats marchandises','602':'Achats matières',
+    '604':'Achats études','605':'Achats matériels',
+    '611':'Transports','612':'Locations','613':'Entretien',
+    '614':'Assurances','618':'Divers charges','621':'Personnel ext.',
+    '631':'Impôts et taxes','641':'Rémunérations','645':'Charges sociales',
+    '661':'Charges intérêts','671':'Charges HAO','681':'Dotations amort.',
+    '701':'Ventes marchandises','702':'Ventes produits finis',
+    '706':'Services vendus','707':'Produits accessoires',
+    '721':'Production immobilisée','731':'Variations stocks',
+    '741':'Subventions','751':'Produits financiers','771':'Produits HAO',
+    '781':'Reprises amort.',
+  };
+  const key3 = c.slice(0,3);
+  const key2 = c.slice(0,2);
+  const key1 = c.slice(0,1);
+  if (map[key3]) return map[key3];
+  if (['60','61','62','63','64','65','66','67','68'].includes(key2)) return 'Charges ' + key2;
+  if (['70','71','72','73','74','75','76','77','78'].includes(key2)) return 'Produits ' + key2;
+  return 'Compte ' + key3;
+}
+
+// ── GET /reporting/balance/:companyId ────────────────────────
+app.get('/reporting/balance/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const periode = req.query.periode || new Date().toISOString().slice(0, 7);
+    const { debut, fin } = moisVersDateRange(periode);
+
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit')
+      .eq('company_id', companyId)
+      .gte('date_ecriture', debut)
+      .lte('date_ecriture', fin);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Agréger par compte
+    const map = {};
+    for (const e of data || []) {
+      const c = String(e.compte || '').slice(0, 6);
+      if (!map[c]) map[c] = { compte: c, libelle: libelleCompte(c), debit: 0, credit: 0 };
+      map[c].debit  += Number(e.debit  || 0);
+      map[c].credit += Number(e.credit || 0);
+    }
+    const lignes = Object.values(map)
+      .map(l => ({ ...l, solde: l.debit - l.credit }))
+      .sort((a, b) => a.compte.localeCompare(b.compte));
+
+    const totDebit  = lignes.reduce((s, l) => s + l.debit,  0);
+    const totCredit = lignes.reduce((s, l) => s + l.credit, 0);
+
+    return res.json({
+      success: true, periode, debut, fin,
+      lignes,
+      totaux: { debit: totDebit, credit: totCredit, solde: totDebit - totCredit },
+      nb_ecritures: (data || []).length,
+    });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /reporting/resultat/:companyId ───────────────────────
+app.get('/reporting/resultat/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const periode = req.query.periode || new Date().toISOString().slice(0, 7);
+    const { debut, fin } = moisVersDateRange(periode);
+
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit, libelle')
+      .eq('company_id', companyId)
+      .gte('date_ecriture', debut)
+      .lte('date_ecriture', fin)
+      .or('compte.like.6%,compte.like.7%');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const charges = {}, produits = {};
+    for (const e of data || []) {
+      const c = String(e.compte || '').slice(0, 3);
+      if (c.startsWith('6')) {
+        if (!charges[c]) charges[c] = { compte: c, libelle: libelleCompte(c), montant: 0 };
+        charges[c].montant += Number(e.debit || 0) - Number(e.credit || 0);
+      }
+      if (c.startsWith('7')) {
+        if (!produits[c]) produits[c] = { compte: c, libelle: libelleCompte(c), montant: 0 };
+        produits[c].montant += Number(e.credit || 0) - Number(e.debit || 0);
+      }
+    }
+    const lignesCharges  = Object.values(charges).sort((a,b)=>a.compte.localeCompare(b.compte));
+    const lignesProduits = Object.values(produits).sort((a,b)=>a.compte.localeCompare(b.compte));
+    const totCharges  = lignesCharges.reduce((s,l)=>s+l.montant,0);
+    const totProduits = lignesProduits.reduce((s,l)=>s+l.montant,0);
+    const resultat    = totProduits - totCharges;
+
+    return res.json({
+      success: true, periode, debut, fin,
+      charges: lignesCharges, produits: lignesProduits,
+      totaux: { charges: totCharges, produits: totProduits, resultat },
+    });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /reporting/tresorerie/:companyId ─────────────────────
+app.get('/reporting/tresorerie/:companyId', async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const periode = req.query.periode || new Date().toISOString().slice(0, 7);
+    const { debut, fin } = moisVersDateRange(periode);
+
+    // Solde d'ouverture = tout avant le mois
+    const { data: avant, error: errAvant } = await supabase
+      .from('ecritures')
+      .select('compte, debit, credit')
+      .eq('company_id', companyId)
+      .or('compte.like.52%,compte.like.57%,compte.like.53%')
+      .lt('date_ecriture', debut);
+
+    const soldOuv = (avant || []).reduce((s,e)=>s+Number(e.debit||0)-Number(e.credit||0),0);
+
+    // Mouvements du mois
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('compte, libelle, debit, credit, date_ecriture')
+      .eq('company_id', companyId)
+      .or('compte.like.52%,compte.like.57%,compte.like.53%')
+      .gte('date_ecriture', debut)
+      .lte('date_ecriture', fin)
+      .order('date_ecriture', { ascending: true });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const mouvements = (data || []).map(e => ({
+      date:           e.date_ecriture,
+      libelle:        e.libelle || libelleCompte(e.compte),
+      compte:         e.compte,
+      encaissement:   Number(e.debit  || 0),
+      decaissement:   Number(e.credit || 0),
+    }));
+
+    const totEnc = mouvements.reduce((s,m)=>s+m.encaissement,0);
+    const totDec = mouvements.reduce((s,m)=>s+m.decaissement,0);
+    const soldFin = soldOuv + totEnc - totDec;
+
+    return res.json({
+      success: true, periode, debut, fin,
+      solde_ouverture: soldOuv,
+      mouvements,
+      totaux: { encaissements: totEnc, decaissements: totDec },
+      solde_cloture: soldFin,
+    });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /reporting/commenter ─────────────────────────────────
+// Génère un commentaire IA sur un rapport mensuel
+app.post('/reporting/commenter', async (req, res) => {
+  try {
+    const { company_name, pays, periode, type, donnees } = req.body;
+    if (!company_name || !periode || !type || !donnees)
+      return res.status(400).json({ error: 'Champs obligatoires: company_name, periode, type, donnees' });
+
+    const MODELE_LIGHT = process.env.CLAUDE_MODEL_LIGHT || 'claude-haiku-4-5-20251001';
+    const tvaParPays = {CI:18,SN:18,CM:19.25,BJ:18,BF:18,ML:18,TG:18,NE:19,GA:18,CG:18,CD:16,GN:18};
+    const tva = tvaParPays[pays] || 18;
+
+    const prompts = {
+      balance: `Tu es expert-comptable SYSCOHADA. Analyse cette balance générale de ${company_name} (${pays}, TVA ${tva}%) pour ${periode} et rédige un commentaire professionnel de 6-8 lignes. Signale les comptes déséquilibrés, les anomalies, et les points d'attention. Données: ${JSON.stringify(donnees).slice(0,1500)}`,
+      resultat: `Tu es expert-comptable SYSCOHADA. Analyse ce compte de résultat de ${company_name} (${pays}) pour ${periode}. Commente la rentabilité, les charges dominantes, et donne 2-3 recommandations. Sois concis et professionnel (6-8 lignes). Données: ${JSON.stringify(donnees).slice(0,1500)}`,
+      tresorerie: `Tu es expert-comptable SYSCOHADA. Analyse cette situation de trésorerie de ${company_name} (${pays}) pour ${periode}. Commente la liquidité, les flux importants, et alerte si solde critique. 6-8 lignes. Données: ${JSON.stringify(donnees).slice(0,1500)}`,
+    };
+
+    const prompt = prompts[type] || prompts.resultat;
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: MODELE_LIGHT,
+        max_tokens: 400,
+        messages: [{ role: 'user', content: prompt }],
+      },
+      {
+        headers: { 'x-api-key': process.env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        timeout: 30000,
+      }
+    );
+    const commentaire = response.data?.content?.[0]?.text || 'Commentaire indisponible.';
+    return res.json({ success: true, commentaire });
+  } catch(err) {
+    return res.status(500).json({ error: err.message, commentaire: 'Commentaire IA indisponible — saisissez votre propre analyse.' });
+  }
+});
+
+// ── POST /reporting/envoyer-rapport ──────────────────────────
+// Envoie le rapport PDF par email à la PME
+app.post('/reporting/envoyer-rapport', async (req, res) => {
+  try {
+    const { email_pme, company_name, periode, expert_name, cabinet_name, commentaire, pdf_html } = req.body;
+    if (!email_pme || !pdf_html) return res.status(400).json({ error: 'email_pme et pdf_html obligatoires' });
+
+    const emailService = require('./services/email.service');
+    await emailService.envoyerRapportMensuel({
+      emailDestinataire: email_pme,
+      nomPME:            company_name || 'Votre entreprise',
+      periode,
+      nomExpert:         expert_name  || 'Votre expert-comptable',
+      nomCabinet:        cabinet_name || 'Cabinet',
+      commentaire:       commentaire  || '',
+      pdfHtml:           pdf_html,
+    });
+
+    return res.json({ success: true, message: `Rapport envoyé à ${email_pme}` });
+  } catch(err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`H-Compta AI Backend running on port ${PORT} 🚀`));
