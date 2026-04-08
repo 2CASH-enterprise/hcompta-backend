@@ -298,9 +298,67 @@ async function envoyerConfirmationInscription({ emailDestinataire, nomPME, nomCo
   });
 }
 
+
+// ----------------------------------------------------------------
+// EMAIL : Rapport mensuel → PME (PDF en pièce jointe)
+// ----------------------------------------------------------------
+async function envoyerRapportMensuel({ emailDestinataire, nomPME, periode, nomExpert, nomCabinet, commentaire, pdfHtml }) {
+  const appUrl    = process.env.APP_URL || 'https://hcompta-ai.com';
+  const pdfBase64 = Buffer.from(pdfHtml || '', 'utf8').toString('base64');
+  const nomFich   = 'rapport_' + (periode||'').replace('-','_') + '_' + (nomPME||'').replace(/[^a-z0-9]/gi,'_').slice(0,20) + '.html';
+
+  const commentBlock = commentaire
+    ? '<div style="background:#F2FAF6;border-left:4px solid #2E8269;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px">'
+      + '<div style="font-size:11px;font-weight:700;color:#2E8269;text-transform:uppercase;margin-bottom:8px">Commentaire de votre expert</div>'
+      + '<div style="font-size:13px;color:#2D3A35;line-height:1.7">' + (commentaire||'').replace(/\n/g,'<br>') + '</div>'
+      + '</div>'
+    : '';
+
+  const htmlContent = '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
+    + '<body style="margin:0;padding:0;background:#F2FAF6;font-family:Arial,sans-serif">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#F2FAF6;padding:32px 16px">'
+    + '<tr><td align="center">'
+    + '<table width="580" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">'
+    + '<tr><td style="background:linear-gradient(135deg,#0D2B22,#2E8269);padding:28px 36px;text-align:center">'
+    + '<div style="font-size:26px;font-weight:900;color:#fff">H-Compta AI</div>'
+    + '<div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:4px">Rapport mensuel · Zone OHADA</div>'
+    + '</td></tr>'
+    + '<tr><td style="padding:32px 36px">'
+    + '<div style="font-size:20px;font-weight:700;color:#0D2B22;margin-bottom:6px">Rapport mensuel — ' + (periode||'') + '</div>'
+    + '<div style="font-size:14px;color:#2D3A35;line-height:1.7;margin-bottom:20px">'
+    + 'Votre expert-comptable <strong>' + (nomExpert||'') + '</strong> (' + (nomCabinet||'') + ') '
+    + 'vous adresse le rapport mensuel de <strong>' + (nomPME||'') + '</strong> pour la période <strong>' + (periode||'') + '</strong>.'
+    + '</div>'
+    + commentBlock
+    + '<div style="background:#FFFBEB;border:1px solid #FCD34D;border-radius:8px;padding:14px 18px;margin-bottom:24px;font-size:13px;color:#92400E">'
+    + 'Le rapport complet (Balance · Résultat · Trésorerie) est joint à cet email.'
+    + '</div>'
+    + '<div style="font-size:12px;color:#9DB8AC;border-top:1px solid #E5F4EE;padding-top:16px">'
+    + 'Généré par H-Compta AI · ' + appUrl + ' · Comptabilité SYSCOHADA zone OHADA'
+    + '</div>'
+    + '</td></tr>'
+    + '</table></td></tr></table></body></html>';
+
+  const response = await axios.post(BREVO_API_URL, {
+    sender: {
+      name:  process.env.BREVO_FROM_NAME  || 'H-Compta AI',
+      email: process.env.BREVO_FROM_EMAIL || 'noreply@hcompta-ai.com',
+    },
+    to: [{ email: emailDestinataire }],
+    subject: 'Rapport mensuel ' + (periode||'') + ' — ' + (nomPME||'') + ' | ' + (nomCabinet||''),
+    htmlContent,
+    attachment: [{ name: nomFich, content: pdfBase64 }],
+  }, {
+    headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
+    timeout: 20000,
+  });
+  return response.data;
+}
+
 module.exports = {
   envoyerEmail,
   envoyerInvitationCabinet,
   envoyerInvitationCollaborateur,
   envoyerConfirmationInscription,
+  envoyerRapportMensuel,
 };
