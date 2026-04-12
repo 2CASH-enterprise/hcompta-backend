@@ -343,12 +343,11 @@ app.post('/invitations/accepter', async (req, res) => {
         expertUserId = existingUser.id;
       } else {
         // Créer le compte Expert automatiquement
-        const nomCabinet = invite.email.split('@')[1]?.split('.')[0] || 'Cabinet';
         const { data: newUser, error: eUser } = await supabase
           .from('users')
           .insert([{
             email:     invite.email.toLowerCase(),
-            full_name: 'Cabinet ' + nomCabinet,
+            full_name: req.body.nom_cabinet || req.body.nom_responsable || ('Cabinet ' + (invite.email.split('@')[1]?.split('.')[0] || 'Expert')),
             role:      'EXPERT',
             is_active: true,
           }])
