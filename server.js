@@ -333,14 +333,21 @@ app.post('/invitations/accepter', async (req, res) => {
       // Chercher par email
       const { data: existingUser } = await supabase
         .from('users')
-        .select('id, email, full_name, role, is_active')
+        .select('id, email, full_name, phone, role, is_active')
         .eq('email', invite.email.toLowerCase())
         .single();
 
       if (existingUser) {
-        // Compte existant — vérifier qu'il est actif
         if (!existingUser.is_active) return res.status(403).json({ error: 'Compte désactivé' });
         expertUserId = existingUser.id;
+
+        // Mettre à jour le nom cabinet et responsable si fournis
+        const updates = {};
+        if (req.body.nom_cabinet)     updates.full_name = req.body.nom_cabinet;
+        if (req.body.nom_responsable) updates.phone     = req.body.nom_responsable;
+        if (Object.keys(updates).length) {
+          await supabase.from('users').update(updates).eq('id', expertUserId);
+        }
       } else {
         // Créer le compte Expert automatiquement
         const { data: newUser, error: eUser } = await supabase
