@@ -1,6 +1,7 @@
 // H-Compta AI — Backend Node.js branché sur les vraies tables Supabase
 const multer  = require('multer');
 const upload  = multer({ storage: multer.memoryStorage() });
+const axios   = require('axios');
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
