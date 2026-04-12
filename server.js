@@ -411,6 +411,28 @@ app.post('/invitations/accepter', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
+app.post('/invitations/annuler', async (req, res) => {
+  try {
+    const { invite_id, company_id } = req.body;
+    if (!invite_id) return res.status(400).json({ error: 'invite_id obligatoire' });
+
+    // Vérifier que l'invitation appartient bien à cette company et est pending
+    const { data: invite, error: eInv } = await supabase
+      .from('invites')
+      .select('id, status, company_id, email')
+      .eq('id', invite_id)
+      .single();
+
+    if (eInv || !invite) return res.status(404).json({ error: 'Invitation introuvable' });
+    if (company_id && invite.company_id !== company_id) return res.status(403).json({ error: 'Non autorisé' });
+    if (invite.status !== 'pending') return res.status(409).json({ error: 'Seules les invitations en attente peuvent être annulées' });
+
+    await supabase.from('invites').update({ status: 'cancelled' }).eq('id', invite_id);
+
+    return res.json({ success: true, message: `Invitation annulée pour ${invite.email}` });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.post('/invitations/refuser', async (req, res) => {
   try {
     const { invite_id } = req.body;
@@ -609,6 +631,29 @@ app.post('/invitations/envoyer', async (req,res) => {
   try {
     const {company_id, email, role, invited_by, expires_at, message} = req.body;
     if (!company_id || !email || !role) return res.status(400).json({error:'company_id, email et role obligatoires'});
+
+    // ── Vérifier qu'il n'existe pas déjà une invitation pending pour cet email+company ──
+    const { data: existing } = await supabase
+      .from('invites')
+      .select('id, status, expires_at')
+      .eq('company_id', company_id)
+      .eq('email', email.toLowerCase())
+      .eq('role', role)
+      .eq('status', 'pending')
+      .single();
+
+    if (existing) {
+      // Vérifier si l'invitation existante est encore valide (non expirée)
+      const estExpiree = new Date(existing.expires_at) < new Date();
+      if (!estExpiree) {
+        return res.status(409).json({
+          error: `Une invitation est déjà en attente pour ${email}. Annulez-la d'abord avant d'en envoyer une nouvelle.`,
+          invite_id: existing.id,
+        });
+      }
+      // Si expirée → on la marque expired et on continue
+      await supabase.from('invites').update({ status: 'expired' }).eq('id', existing.id);
+    }
 
     // Générer un token unique
     const token = require('crypto').randomBytes(32).toString('hex');
