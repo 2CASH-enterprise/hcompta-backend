@@ -71,7 +71,7 @@ app.get('/pays/tva/:code', (req,res) => {
 });
 
 // STATS PME
-app.get('/stats/:companyId', authRequis, async (req,res) => {
+app.get('/stats/:companyId', async (req,res) => {
   try {
     const {companyId} = req.params;
     const [{count:total,error:e1},{count:alertes,error:e2},{data:scores,error:e3},{data:ecritures,error:e4},{data:company}] = await Promise.all([
@@ -102,7 +102,7 @@ app.get('/stats/:companyId', authRequis, async (req,res) => {
 });
 
 // PIECES PME
-app.get('/pieces/recent/:companyId', authRequis, async (req,res) => {
+app.get('/pieces/recent/:companyId', async (req,res) => {
   try {
     const {data,error} = await supabase.from('pieces')
       .select('id,file_name,file_url,type_piece,journal,score_confiance,status,uploaded_at')
@@ -112,7 +112,7 @@ app.get('/pieces/recent/:companyId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/pieces/all/:companyId', authRequis, async (req,res) => {
+app.get('/pieces/all/:companyId', async (req,res) => {
   try {
     const {data,error} = await supabase.from('pieces')
       .select('id,file_name,file_url,type_piece,journal,score_confiance,status,uploaded_at,processed_at')
@@ -122,7 +122,7 @@ app.get('/pieces/all/:companyId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.post('/pieces/upload', authRequis, upload.single('file'), async (req,res) => {
+app.post('/pieces/upload', upload.single('file'), async (req,res) => {
   try {
     const {company_id,uploaded_by} = req.body;
     const file = req.file;
@@ -156,7 +156,7 @@ app.post('/tva/generer/:companyId', (req, res) => {
 
 // REPORTING
 // ── GET /ecritures/:companyId — Toutes les écritures d'une PME ──
-app.get('/ecritures/:companyId', authRequis, async (req, res) => {
+app.get('/ecritures/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
     const { periode, journal } = req.query;
@@ -179,7 +179,7 @@ app.get('/ecritures/:companyId', authRequis, async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/reporting/:companyId', authRequis, async (req,res) => {
+app.get('/reporting/:companyId', async (req,res) => {
   try {
     const {data:ecritures,error} = await supabase.from('ecritures').select('compte,debit,credit').eq('company_id',req.params.companyId);
     if(error) return res.status(500).json({error:error.message});
@@ -191,7 +191,7 @@ app.get('/reporting/:companyId', authRequis, async (req,res) => {
 });
 
 // UTILISATEURS
-app.get('/utilisateurs/:companyId', authRequis, async (req,res) => {
+app.get('/utilisateurs/:companyId', async (req,res) => {
   try {
     const {data,error} = await supabase.from('company_users')
       .select('id,role_in_company,status,invited_by,created_at,users(id,email,full_name,phone,role,is_active)')
@@ -202,14 +202,14 @@ app.get('/utilisateurs/:companyId', authRequis, async (req,res) => {
 });
 
 // NOTIFICATIONS
-app.get('/notifications/:userId', authRequis, async (req,res) => {
+app.get('/notifications/:userId', async (req,res) => {
   try {
     const {data,error} = await supabase.from('notifications').select('*').eq('user_id',req.params.userId).eq('is_read',false).order('created_at',{ascending:false}).limit(20);
     if(error) return res.status(500).json({error:error.message});
     return res.json(data||[]);
   } catch(err){return res.status(500).json({error:err.message});}
 });
-app.patch('/notifications/:id/read', authRequis, async (req,res) => {
+app.patch('/notifications/:id/read', async (req,res) => {
   try {
     const {error} = await supabase.from('notifications').update({is_read:true}).eq('id',req.params.id);
     if(error) return res.status(500).json({error:error.message});
@@ -226,7 +226,7 @@ async function getCompaniesForExpert(expertUserId) {
   return (data||[]).map(l=>l.company_id);
 }
 
-app.get('/cabinet/stats/:expertUserId', authRequis, async (req,res) => {
+app.get('/cabinet/stats/:expertUserId', async (req,res) => {
   try {
     const ids = await getCompaniesForExpert(req.params.expertUserId);
     if(!ids.length) return res.json({total_clients:0,total_anomalies:0,ecritures_count:0,score_moyen:0,company_ids:[]});
@@ -240,7 +240,7 @@ app.get('/cabinet/stats/:expertUserId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/cabinet/clients/:expertUserId', authRequis, async (req,res) => {
+app.get('/cabinet/clients/:expertUserId', async (req,res) => {
   try {
     const ids = await getCompaniesForExpert(req.params.expertUserId);
     if(!ids.length) return res.json([]);
@@ -260,7 +260,7 @@ app.get('/cabinet/clients/:expertUserId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/cabinet/anomalies/:expertUserId', authRequis, async (req,res) => {
+app.get('/cabinet/anomalies/:expertUserId', async (req,res) => {
   try {
     const ids = await getCompaniesForExpert(req.params.expertUserId);
     if(!ids.length) return res.json([]);
@@ -270,7 +270,7 @@ app.get('/cabinet/anomalies/:expertUserId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/cabinet/pme/:companyId', authRequis, async (req,res) => {
+app.get('/cabinet/pme/:companyId', async (req,res) => {
   try {
     const {companyId} = req.params;
     const [{data:company},{data:pieces},{data:ecritures}] = await Promise.all([
@@ -287,7 +287,7 @@ app.get('/cabinet/pme/:companyId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/cabinet/invitations/:email', authRequis, async (req,res) => {
+app.get('/cabinet/invitations/:email', async (req,res) => {
   try {
     const {data,error} = await supabase.from('invites')
       .select('id,role,status,expires_at,created_at,companies(id,company_name,country)')
@@ -297,44 +297,111 @@ app.get('/cabinet/invitations/:email', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-// INVITATIONS — accepter / refuser
-app.post('/invitations/accepter', authRequis, async (req, res) => {
+// INVITATIONS — accepter via token (lien email) ou via user_id (dashboard)
+app.post('/invitations/accepter', async (req, res) => {
   try {
-    const { invite_id, expert_user_id } = req.body;
-    if (!invite_id || !expert_user_id) return res.status(400).json({ error: 'invite_id et expert_user_id obligatoires' });
+    const { invite_id, expert_user_id, token: inviteToken } = req.body;
 
-    // Récupérer l'invitation
-    const { data: invite, error: eInv } = await supabase
-      .from('invites')
-      .select('id, company_id, email, role, status, expires_at')
-      .eq('id', invite_id)
-      .single();
+    // Retrouver l'invitation — soit par id, soit par token (lien email)
+    let invite = null;
+    if (inviteToken) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('id, company_id, email, role, status, expires_at')
+        .eq('token', inviteToken)
+        .single();
+      if (error || !data) return res.status(404).json({ error: 'Lien d\'invitation invalide ou expiré' });
+      invite = data;
+    } else if (invite_id) {
+      const { data, error } = await supabase
+        .from('invites')
+        .select('id, company_id, email, role, status, expires_at')
+        .eq('id', invite_id)
+        .single();
+      if (error || !data) return res.status(404).json({ error: 'Invitation introuvable' });
+      invite = data;
+    } else {
+      return res.status(400).json({ error: 'invite_id ou token obligatoire' });
+    }
 
-    if (eInv || !invite) return res.status(404).json({ error: 'Invitation introuvable' });
     if (invite.status !== 'pending') return res.status(409).json({ error: 'Invitation déjà traitée' });
     if (new Date(invite.expires_at) < new Date()) return res.status(410).json({ error: 'Invitation expirée' });
 
-    // Créer le lien company_users (EXPERT ↔ PME)
-    const { error: eCU } = await supabase.from('company_users').insert([{
-      company_id:       invite.company_id,
-      user_id:          expert_user_id,
-      role_in_company:  invite.role || 'EXPERT',
-      status:           'active',
-      invited_by:       null,
-    }]);
+    // Créer le compte Expert s'il n'existe pas encore
+    let expertUserId = expert_user_id || null;
+    if (!expertUserId) {
+      // Chercher par email
+      const { data: existingUser } = await supabase
+        .from('users')
+        .select('id, email, full_name, role, is_active')
+        .eq('email', invite.email.toLowerCase())
+        .single();
 
-    if (eCU && !eCU.message.includes('duplicate')) {
-      return res.status(500).json({ error: 'Erreur création lien : ' + eCU.message });
+      if (existingUser) {
+        // Compte existant — vérifier qu'il est actif
+        if (!existingUser.is_active) return res.status(403).json({ error: 'Compte désactivé' });
+        expertUserId = existingUser.id;
+      } else {
+        // Créer le compte Expert automatiquement
+        const nomCabinet = invite.email.split('@')[1]?.split('.')[0] || 'Cabinet';
+        const { data: newUser, error: eUser } = await supabase
+          .from('users')
+          .insert([{
+            email:     invite.email.toLowerCase(),
+            full_name: 'Cabinet ' + nomCabinet,
+            role:      'EXPERT',
+            is_active: true,
+          }])
+          .select()
+          .single();
+        if (eUser) return res.status(500).json({ error: 'Erreur création compte : ' + eUser.message });
+        expertUserId = newUser.id;
+      }
     }
 
-    // Mettre à jour le statut de l'invitation
-    await supabase.from('invites').update({ status: 'accepted' }).eq('id', invite_id);
+    // Créer le lien company_users (EXPERT ↔ PME) si pas déjà existant
+    const { error: eCU } = await supabase.from('company_users').insert([{
+      company_id:      invite.company_id,
+      user_id:         expertUserId,
+      role_in_company: invite.role || 'EXPERT',
+      status:          'active',
+      invited_by:      null,
+    }]);
+    if (eCU && !eCU.message.includes('duplicate')) {
+      return res.status(500).json({ error: 'Erreur liaison PME-Cabinet : ' + eCU.message });
+    }
 
-    return res.json({ success: true, message: 'Invitation acceptée — PME ajoutée à votre portefeuille', company_id: invite.company_id });
+    // Marquer l'invitation comme acceptée
+    await supabase.from('invites').update({ status: 'accepted' }).eq('id', invite.id);
+
+    // Récupérer les infos de la PME pour la réponse
+    const { data: company } = await supabase
+      .from('companies')
+      .select('company_name, country')
+      .eq('id', invite.company_id)
+      .single();
+
+    // Générer un JWT pour connexion automatique
+    const token = genererToken({
+      user_id:    expertUserId,
+      email:      invite.email,
+      role:       'EXPERT',
+      company_id: null,
+    });
+
+    return res.json({
+      success:    true,
+      message:    'Invitation acceptée — ' + (company?.company_name || 'PME') + ' ajoutée à votre portefeuille',
+      company_id: invite.company_id,
+      user_id:    expertUserId,
+      token,                    // ← JWT pour connexion automatique depuis le lien email
+      email:      invite.email,
+      role:       'EXPERT',
+    });
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.post('/invitations/refuser', authRequis, async (req, res) => {
+app.post('/invitations/refuser', async (req, res) => {
   try {
     const { invite_id } = req.body;
     if (!invite_id) return res.status(400).json({ error: 'invite_id obligatoire' });
@@ -344,7 +411,7 @@ app.post('/invitations/refuser', authRequis, async (req, res) => {
 });
 
 // AMBASSADEUR
-app.get('/ambassadeur/stats/:userId', authRequis, async (req,res) => {
+app.get('/ambassadeur/stats/:userId', async (req,res) => {
   try {
     const {data:amb,error} = await supabase.from('ambassadors').select('*').eq('user_id',req.params.userId).single();
     if(error||!amb) return res.status(404).json({error:'Ambassadeur non trouvé'});
@@ -358,7 +425,7 @@ app.get('/ambassadeur/stats/:userId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/ambassadeur/filleuls/:userId', authRequis, async (req,res) => {
+app.get('/ambassadeur/filleuls/:userId', async (req,res) => {
   try {
     const {data:amb} = await supabase.from('ambassadors').select('id,commission_rate').eq('user_id',req.params.userId).single();
     if(!amb) return res.status(404).json({error:'Ambassadeur non trouvé'});
@@ -369,7 +436,7 @@ app.get('/ambassadeur/filleuls/:userId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/ambassadeur/historique/:userId', authRequis, async (req,res) => {
+app.get('/ambassadeur/historique/:userId', async (req,res) => {
   try {
     const {data:amb} = await supabase.from('ambassadors').select('id').eq('user_id',req.params.userId).single();
     if(!amb) return res.status(404).json({error:'Ambassadeur non trouvé'});
@@ -379,7 +446,7 @@ app.get('/ambassadeur/historique/:userId', authRequis, async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/ambassadeur/profil/:userId', authRequis, async (req,res) => {
+app.get('/ambassadeur/profil/:userId', async (req,res) => {
   try {
     const [{data:user},{data:amb}] = await Promise.all([
       supabase.from('users').select('id,email,full_name,phone,country').eq('id',req.params.userId).single(),
@@ -511,7 +578,7 @@ app.post('/demande-demo', async (req,res) => {
 });
 
 // INVITATIONS — envoi et liste
-app.post('/invitations/envoyer', authRequis, async (req,res) => {
+app.post('/invitations/envoyer', async (req,res) => {
   try {
     const {company_id, email, role, invited_by, expires_at, message} = req.body;
     if (!company_id || !email || !role) return res.status(400).json({error:'company_id, email et role obligatoires'});
@@ -586,7 +653,7 @@ app.post('/invitations/envoyer', authRequis, async (req,res) => {
   } catch(err) {return res.status(500).json({error:err.message});}
 });
 
-app.get('/invitations/:companyId', authRequis, async (req,res) => {
+app.get('/invitations/:companyId', async (req,res) => {
   try {
     const {data,error} = await supabase.from('invites')
       .select('id, email, role, status, expires_at, created_at')
@@ -634,7 +701,7 @@ app.get('/blog/:slug', async (req, res) => {
 });
 
 // ── POST /api/blog — Créer un article (admin) ─────────────────
-app.post('/api/blog', adminRequis, async (req, res) => {
+app.post('/api/blog', async (req, res) => {
   try {
     const { title, slug, excerpt, content, meta_title, meta_description, keywords,
             country, category, cover_image_url, is_published, author } = req.body;
@@ -656,7 +723,7 @@ app.post('/api/blog', adminRequis, async (req, res) => {
 });
 
 // ── PATCH /api/blog/:id — Modifier un article (admin) ─────────
-app.patch('/api/blog/:id', adminRequis, async (req, res) => {
+app.patch('/api/blog/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const updates = { ...req.body };
@@ -670,7 +737,7 @@ app.patch('/api/blog/:id', adminRequis, async (req, res) => {
 });
 
 // ── DELETE /api/blog/:id — Supprimer un article (admin) ───────
-app.delete('/api/blog/:id', adminRequis, async (req, res) => {
+app.delete('/api/blog/:id', async (req, res) => {
   try {
     const { error } = await supabase.from('blog_posts').delete().eq('id', req.params.id);
     if (error) return res.status(500).json({ error: error.message });
@@ -734,7 +801,7 @@ function libelleCompte(compte) {
 }
 
 // ── GET /reporting/balance/:companyId ────────────────────────
-app.get('/reporting/balance/:companyId', authRequis, async (req, res) => {
+app.get('/reporting/balance/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
     const periode = req.query.periode || new Date().toISOString().slice(0, 7);
@@ -774,7 +841,7 @@ app.get('/reporting/balance/:companyId', authRequis, async (req, res) => {
 });
 
 // ── GET /reporting/resultat/:companyId ───────────────────────
-app.get('/reporting/resultat/:companyId', authRequis, async (req, res) => {
+app.get('/reporting/resultat/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
     const periode = req.query.periode || new Date().toISOString().slice(0, 7);
@@ -817,7 +884,7 @@ app.get('/reporting/resultat/:companyId', authRequis, async (req, res) => {
 });
 
 // ── GET /reporting/tresorerie/:companyId ─────────────────────
-app.get('/reporting/tresorerie/:companyId', authRequis, async (req, res) => {
+app.get('/reporting/tresorerie/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
     const periode = req.query.periode || new Date().toISOString().slice(0, 7);
@@ -869,7 +936,7 @@ app.get('/reporting/tresorerie/:companyId', authRequis, async (req, res) => {
 
 // ── POST /reporting/commenter ─────────────────────────────────
 // Génère un commentaire IA sur un rapport mensuel
-app.post('/reporting/commenter', authRequis, async (req, res) => {
+app.post('/reporting/commenter', async (req, res) => {
   try {
     const { company_name, pays, periode, type, donnees } = req.body;
     if (!company_name || !periode || !type || !donnees)
@@ -907,7 +974,7 @@ app.post('/reporting/commenter', authRequis, async (req, res) => {
 
 // ── POST /reporting/envoyer-rapport ──────────────────────────
 // Envoie le rapport PDF par email à la PME
-app.post('/reporting/envoyer-rapport', authRequis, async (req, res) => {
+app.post('/reporting/envoyer-rapport', async (req, res) => {
   try {
     const { email_pme, company_name, periode, expert_name, cabinet_name, commentaire, pdf_html } = req.body;
     if (!email_pme || !pdf_html) return res.status(400).json({ error: 'email_pme et pdf_html obligatoires' });
@@ -945,7 +1012,7 @@ const PLANS_CP = {
 };
 const TVA_PAYS = {CI:18,SN:18,CM:19.25,BJ:18,BF:18,ML:18,TG:18,NE:19,GA:18,CG:18,CD:16,GN:18};
 
-app.post('/api/paiement/initier', authRequis, async (req, res) => {
+app.post('/api/paiement/initier', async (req, res) => {
   try {
     const { company_id, plan, country, phone, moyen_paiement } = req.body;
     if (!company_id || !plan) return res.status(400).json({ error: 'company_id et plan obligatoires' });
@@ -1044,7 +1111,7 @@ app.post('/api/paiement/notify', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/paiement/historique/:companyId', authRequis, async (req, res) => {
+app.get('/api/paiement/historique/:companyId', async (req, res) => {
   try {
     const { data, error } = await supabase.from('paiements')
       .select('id,plan,montant_ttc,devise,status,moyen,paid_at,created_at,transaction_id')
@@ -1060,6 +1127,30 @@ app.get('/api/paiement/verifier/:transactionId', async (req, res) => {
       .select('status,plan,montant_ttc,devise,paid_at').eq('transaction_id', req.params.transactionId).single();
     return res.json({ success: true, paiement: data });
   } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── ROUTE TEST EMAIL ─────────────────────────────────────────
+app.post('/api/admin/test-email', async (req, res) => {
+  try {
+    const { email_dest } = req.body;
+    if (!email_dest) return res.status(400).json({ error: 'email_dest obligatoire' });
+    const config = {
+      BREVO_API_KEY:    process.env.BREVO_API_KEY ? 'OK (' + process.env.BREVO_API_KEY.slice(0,8) + '...)' : 'MANQUANTE',
+      BREVO_FROM_EMAIL: process.env.BREVO_FROM_EMAIL || 'noreply@hcompta-ai.com (defaut)',
+    };
+    if (!process.env.BREVO_API_KEY) return res.status(500).json({ error: 'BREVO_API_KEY manquante', config });
+    let senders = [];
+    try {
+      const sr = await axios.get('https://api.brevo.com/v3/senders', { headers: { 'api-key': process.env.BREVO_API_KEY }, timeout: 5000 });
+      senders = (sr.data?.senders || []).map(s => s.email + (s.active ? ' (actif)' : ' (inactif)'));
+    } catch(se) { senders = ['erreur: ' + se.message]; }
+    config.EXPEDITEURS_BREVO = senders;
+    const emailService = require('./services/email.service');
+    await emailService.envoyerEmail({ to: email_dest, subject: '[H-Compta AI] Test email ' + new Date().toLocaleString('fr-FR'), htmlContent: '<p>Test OK depuis Render · ' + new Date().toISOString() + '</p>' });
+    return res.json({ success: true, message: 'Email envoyé à ' + email_dest, config });
+  } catch(err) {
+    return res.status(500).json({ error: 'Echec Brevo', detail: JSON.stringify(err.response?.data || err.message), status: err.response?.status, config: { BREVO_API_KEY: process.env.BREVO_API_KEY ? 'OK' : 'MANQUANTE', BREVO_FROM_EMAIL: process.env.BREVO_FROM_EMAIL || 'non defini' } });
+  }
 });
 
 
@@ -1105,76 +1196,6 @@ app.post('/api/admin/test-email', async (req, res) => {
       }
     });
   }
-});
-
-
-// ── POST /api/admin/invitation-ambassadeur ───────────────────
-// Crée un compte ambassadeur depuis le dashboard admin
-app.post('/api/admin/invitation-ambassadeur', adminRequis, async (req, res) => {
-  try {
-    const { email, full_name, phone, country, commission_rate, promo_code } = req.body;
-    if (!email || !full_name) return res.status(400).json({ error: 'email et full_name obligatoires' });
-
-    // Vérifier si l'utilisateur existe déjà
-    const { data: existing } = await supabase.from('users').select('id,role').eq('email', email.toLowerCase()).single();
-    let userId = existing?.id;
-
-    if (!userId) {
-      const { data: newUser, error: eUser } = await supabase.from('users').insert([{
-        email:     email.toLowerCase(),
-        full_name,
-        phone:     phone || null,
-        country:   country || 'CI',
-        role:      'AMBASSADOR',
-        is_active: true,
-      }]).select().single();
-      if (eUser) return res.status(500).json({ error: 'Erreur création user: ' + eUser.message });
-      userId = newUser.id;
-    } else if (existing.role !== 'AMBASSADOR') {
-      await supabase.from('users').update({ role: 'AMBASSADOR' }).eq('id', userId);
-    }
-
-    const { data: existingAmb } = await supabase.from('ambassadors').select('id').eq('user_id', userId).single();
-    if (existingAmb) return res.status(409).json({ error: 'Cet utilisateur est déjà ambassadeur' });
-
-    const code = (promo_code || full_name.split(' ')[0].toUpperCase() + Math.floor(Math.random() * 900 + 100)).toUpperCase();
-    const { data: codeExist } = await supabase.from('ambassadors').select('id').eq('promo_code', code).single();
-    if (codeExist) return res.status(409).json({ error: 'Code promo déjà utilisé, choisissez-en un autre' });
-
-    const { data: amb, error: eAmb } = await supabase.from('ambassadors').insert([{
-      user_id:         userId,
-      promo_code:      code,
-      commission_rate: commission_rate || 10,
-      status:          'active',
-    }]).select().single();
-    if (eAmb) return res.status(500).json({ error: 'Erreur création ambassadeur: ' + eAmb.message });
-
-    // Email de bienvenue
-    try {
-      const emailService = require('./services/email.service');
-      const tauxComm = commission_rate || 10;
-      await emailService.envoyerEmail({
-        to:          email,
-        subject:     'Bienvenue dans le programme ambassadeur H-Compta AI !',
-        htmlContent: '<div style="font-family:Arial,sans-serif;max-width:520px;margin:32px auto;padding:28px;background:#F2FAF6;border-radius:12px">'
-          + '<h2 style="color:#0D2B22">Bienvenue, ' + full_name + ' ! \uD83C\uDF89</h2>'
-          + '<p style="color:#2D3A35;line-height:1.6">Vous \u00eates d\u00e9sormais ambassadeur H-Compta AI. Partagez votre code promo pour gagner des commissions.</p>'
-          + '<div style="background:#fff;border-radius:8px;padding:20px;text-align:center;margin:24px 0">'
-          + '<div style="font-size:13px;color:#9DB8AC;margin-bottom:8px">Votre code promo</div>'
-          + '<div style="font-size:32px;font-weight:700;color:#1A7A4E;letter-spacing:4px">' + code + '</div>'
-          + '</div>'
-          + '<p style="color:#9DB8AC;font-size:12px">Commission\u00a0: ' + tauxComm + '% sur chaque abonnement actif</p>'
-          + '</div>',
-      });
-    } catch(emailErr) { console.error('Email ambassadeur:', emailErr.message); }
-
-    return res.status(201).json({
-      success: true,
-      message: 'Ambassadeur ' + full_name + ' cr\u00e9\u00e9 avec le code ' + code,
-      user_id: userId,
-      ambassador: amb,
-    });
-  } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
 app.listen(PORT, () => {
