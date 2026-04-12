@@ -927,6 +927,220 @@ app.post('/reporting/envoyer-rapport', async (req, res) => {
 });
 
 
+// ================================================================
+// CINETPAY — Paiement abonnement
+// ================================================================
+const CINETPAY_API_URL = 'https://api-checkout.cinetpay.com/v2/payment';
+const PLANS_CP = {
+  tpe: { montant_ht: 12500, label: 'Plan TPE' },
+  pme: { montant_ht: 25000, label: 'Plan PME' },
+};
+const TVA_PAR_PAYS_CP = {CI:18,SN:18,CM:19.25,BJ:18,BF:18,ML:18,TG:18,NE:19,GA:18,CG:18,CD:16,GN:18};
+
+// ── POST /api/paiement/initier ────────────────────────────────
+// Crée une transaction CinetPay et retourne l'URL de paiement
+app.post('/api/paiement/initier', async (req, res) => {
+  try {
+    const { company_id, plan, country, phone, moyen_paiement } = req.body;
+    if (!company_id || !plan) return res.status(400).json({ error: 'company_id et plan obligatoires' });
+
+    const planInfo = PLANS_CP[plan.toLowerCase()] || PLANS_CP.pme;
+    const taux     = TVA_PAR_PAYS_CP[country] || 18;
+    const montantHT  = planInfo.montant_ht;
+    const montantTVA = Math.round(montantHT * taux / 100);
+    const montantTTC = montantHT + montantTVA;
+    const devise     = (country === 'CD') ? 'USD' : (country === 'GN') ? 'GNF' : 'XOF';
+
+    // Récupérer les infos de la société
+    const { data: company } = await supabase
+      .from('companies')
+      .select('company_name, email, country')
+      .eq('id', company_id)
+      .single();
+
+    // Générer un ID de transaction unique
+    const transactionId = 'HCA-' + company_id.slice(0,8).toUpperCase() + '-' + Date.now();
+    const appUrl = process.env.APP_URL || 'https://hcompta-ai.com';
+
+    // Créer la transaction dans CinetPay
+    const cinetPayRes = await axios.post(CINETPAY_API_URL, {
+      apikey:         process.env.CINETPAY_API_KEY,
+      site_id:        process.env.CINETPAY_SITE_ID,
+      transaction_id: transactionId,
+      amount:         montantTTC,
+      currency:       devise,
+      description:    planInfo.label + ' H-Compta AI — ' + (company?.company_name || company_id),
+      notify_url:     appUrl + '/api/paiement/notify',
+      return_url:     appUrl + '/dashboard_pme_v3.html?paiement=success',
+      channels:       moyen_paiement === 'cb' ? 'CREDIT_CARD' : 'MOBILE_MONEY',
+      customer_name:  company?.company_name || 'PME',
+      customer_email: company?.email || '',
+      customer_phone_number: phone || '',
+      customer_address: country || 'CI',
+      customer_city:  country || 'CI',
+      customer_country: country || 'CI',
+      customer_state: country || 'CI',
+      customer_zip_code: '00000',
+      lang:           'fr',
+    }, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+
+    const cpData = cinetPayRes.data;
+    if (cpData.code !== '201') {
+      return res.status(500).json({ error: 'CinetPay erreur: ' + (cpData.message || cpData.code) });
+    }
+
+    // Enregistrer la transaction dans Supabase
+    await supabase.from('paiements').insert([{
+      company_id,
+      transaction_id: transactionId,
+      plan,
+      montant_ht:   montantHT,
+      montant_tva:  montantTVA,
+      montant_ttc:  montantTTC,
+      devise,
+      status:       'pending',
+      moyen:        moyen_paiement || 'mobile_money',
+      payment_url:  cpData.data?.payment_url,
+    }]).catch(() => {});
+
+    return res.json({
+      success:     true,
+      payment_url: cpData.data?.payment_url,
+      payment_token: cpData.data?.payment_token,
+      transaction_id: transactionId,
+      montant_ttc: montantTTC,
+      devise,
+    });
+
+  } catch(err) {
+    const detail = err.response?.data || err.message;
+    console.error('❌ CinetPay initier:', detail);
+    return res.status(500).json({ error: 'Erreur CinetPay: ' + JSON.stringify(detail) });
+  }
+});
+
+// ── POST /api/paiement/notify ─────────────────────────────────
+// Webhook CinetPay — appelé automatiquement après paiement
+app.post('/api/paiement/notify', async (req, res) => {
+  try {
+    const { cpm_trans_id, cpm_site_id, cpm_amount, cpm_currency,
+            cpm_payid, cpm_payment_config, cpm_error_message,
+            cpm_result, payment_method } = req.body;
+
+    console.log('📥 Webhook CinetPay reçu:', { cpm_trans_id, cpm_result });
+
+    if (cpm_result !== '00') {
+      console.warn('⚠️ Paiement CinetPay échoué:', cpm_error_message);
+      await supabase.from('paiements')
+        .update({ status: 'failed', error: cpm_error_message })
+        .eq('transaction_id', cpm_trans_id);
+      return res.json({ success: false });
+    }
+
+    // Vérifier le paiement auprès de CinetPay
+    const verifyRes = await axios.post('https://api-checkout.cinetpay.com/v2/payment/check', {
+      apikey:  process.env.CINETPAY_API_KEY,
+      site_id: process.env.CINETPAY_SITE_ID,
+      transaction_id: cpm_trans_id,
+    }, { timeout: 15000 });
+
+    const verif = verifyRes.data;
+    if (!verif || verif.code !== '00') {
+      console.error('❌ Vérification CinetPay échouée:', verif);
+      return res.json({ success: false });
+    }
+
+    // Récupérer le paiement en base
+    const { data: paiement } = await supabase
+      .from('paiements')
+      .select('company_id, plan, montant_ttc')
+      .eq('transaction_id', cpm_trans_id)
+      .single();
+
+    if (!paiement) {
+      console.error('❌ Transaction inconnue:', cpm_trans_id);
+      return res.json({ success: false });
+    }
+
+    // ✅ Paiement confirmé → activer la PME
+    await Promise.all([
+      // Mettre à jour le paiement
+      supabase.from('paiements').update({
+        status: 'paid',
+        paid_at: new Date().toISOString(),
+        cinetpay_id: cpm_payid,
+        moyen: payment_method,
+      }).eq('transaction_id', cpm_trans_id),
+
+      // Activer la société
+      supabase.from('companies').update({
+        status: 'active',
+        plan:   paiement.plan,
+        subscription_start: new Date().toISOString().slice(0,10),
+        subscription_end:   new Date(Date.now() + 31*24*60*60*1000).toISOString().slice(0,10),
+      }).eq('id', paiement.company_id),
+    ]);
+
+    // Email de confirmation
+    try {
+      const { data: company } = await supabase
+        .from('companies')
+        .select('company_name, email, country')
+        .eq('id', paiement.company_id)
+        .single();
+      if (company?.email) {
+        const emailService = require('./services/email.service');
+        await emailService.envoyerConfirmationPaiement({
+          emailDestinataire: company.email,
+          nomPME:   company.company_name,
+          plan:     paiement.plan.toUpperCase(),
+          montant:  Number(paiement.montant_ttc).toLocaleString('fr-FR'),
+          devise:   cpm_currency || 'FCFA',
+          transactionId: cpm_trans_id,
+        });
+      }
+    } catch(emailErr) { console.error('Email confirmation:', emailErr.message); }
+
+    console.log('✅ PME activée:', paiement.company_id, '— plan:', paiement.plan);
+    return res.json({ success: true });
+
+  } catch(err) {
+    console.error('❌ Webhook notify erreur:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/paiement/historique/:companyId ───────────────────
+app.get('/api/paiement/historique/:companyId', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('paiements')
+      .select('id,plan,montant_ttc,devise,status,moyen,paid_at,created_at,transaction_id')
+      .eq('company_id', req.params.companyId)
+      .order('created_at', { ascending: false })
+      .limit(12);
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, paiements: data || [] });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/paiement/verifier/:transactionId ─────────────────
+// Vérification manuelle depuis le frontend (return_url)
+app.get('/api/paiement/verifier/:transactionId', async (req, res) => {
+  try {
+    const { data } = await supabase
+      .from('paiements')
+      .select('status, plan, montant_ttc, devise, paid_at')
+      .eq('transaction_id', req.params.transactionId)
+      .single();
+    return res.json({ success: true, paiement: data });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+
 const PORT = process.env.PORT || 3000;
 // ── ROUTE TEST EMAIL — diagnostic Brevo ─────────────────────
 app.post('/api/admin/test-email', async (req, res) => {
