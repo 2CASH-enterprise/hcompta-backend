@@ -81,7 +81,6 @@ async function envoyerInvitationCabinet({ emailDestinataire, nomPME, tokenInvita
     </div>
     <a href="${lienAcceptation}" style="display:inline-block;background:#0D2B22;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px">✅ Accepter l'invitation →</a>
     <p style="color:#9DB8AC;font-size:12px;margin:24px 0 0">Ce lien expire le <strong>${dateExpiration}</strong>. Si vous n'attendiez pas cette invitation, ignorez cet email.</p>
-    <p style="color:#9DB8AC;font-size:11px;margin:8px 0 0;word-break:break-all">Lien : ${lienAcceptation}</p>
   </div>
   <div style="padding:20px 40px;background:#F8FAF9;border-top:1px solid #E2EDE8">
     <p style="color:#9DB8AC;font-size:12px;margin:0">H-Compta AI · ${APP_URL} · Support : support@hcompta-ai.com</p>
