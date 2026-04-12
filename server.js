@@ -347,7 +347,8 @@ app.post('/invitations/accepter', async (req, res) => {
           .from('users')
           .insert([{
             email:     invite.email.toLowerCase(),
-            full_name: req.body.nom_cabinet || req.body.nom_responsable || ('Cabinet ' + (invite.email.split('@')[1]?.split('.')[0] || 'Expert')),
+            full_name: req.body.nom_cabinet     || ('Cabinet ' + (invite.email.split('@')[1]?.split('.')[0] || 'Expert')),
+            phone:     req.body.nom_responsable || null,   // nom responsable stocké dans phone
             role:      'EXPERT',
             is_active: true,
           }])
@@ -389,13 +390,16 @@ app.post('/invitations/accepter', async (req, res) => {
     });
 
     return res.json({
-      success:    true,
-      message:    'Invitation acceptée — ' + (company?.company_name || 'PME') + ' ajoutée à votre portefeuille',
-      company_id: invite.company_id,
-      user_id:    expertUserId,
-      token,                    // ← JWT pour connexion automatique depuis le lien email
-      email:      invite.email,
-      role:       'EXPERT',
+      success:         true,
+      message:         'Invitation acceptée — ' + (company?.company_name || 'PME') + ' ajoutée à votre portefeuille',
+      company_id:      invite.company_id,
+      user_id:         expertUserId,
+      token,
+      email:           invite.email,
+      role:            'EXPERT',
+      nom_cabinet:     req.body.nom_cabinet     || null,
+      nom_responsable: req.body.nom_responsable || null,
+      full_name:       req.body.nom_cabinet     || null,
     });
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
@@ -413,10 +417,11 @@ app.post('/invitations/refuser', async (req, res) => {
 app.patch('/utilisateurs/profil/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const { full_name, country } = req.body;
+    const { full_name, phone, country } = req.body;
     const updates = {};
-    if (full_name) updates.full_name = full_name;
-    if (country)   updates.country   = country;
+    if (full_name !== undefined) updates.full_name = full_name;
+    if (phone     !== undefined) updates.phone     = phone;
+    if (country   !== undefined) updates.country   = country;
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'Aucun champ à mettre à jour' });
     const { data, error } = await supabase.from('users').update(updates).eq('id', userId).select().single();
     if (error) return res.status(500).json({ error: error.message });
@@ -531,7 +536,7 @@ app.post('/connexion', async (req,res) => {
   try {
     const {email} = req.body;
     if(!email) return res.status(400).json({error:'Email obligatoire'});
-    const {data:user,error} = await supabase.from('users').select('id,email,full_name,role,country,expert_firm_id,is_active').eq('email',email.toLowerCase()).single();
+    const {data:user,error} = await supabase.from('users').select('id,email,full_name,phone,role,country,expert_firm_id,is_active').eq('email',email.toLowerCase()).single();
     if(error||!user) return res.status(404).json({error:'Aucun compte trouvé avec cet email'});
     if(!user.is_active) return res.status(403).json({error:'Compte désactivé'});
     let company = null;
@@ -549,15 +554,16 @@ app.post('/connexion', async (req,res) => {
     });
     const redirectMap = {PME_OWNER:'/dashboard-pme',COLLABORATOR:'/dashboard-pme',EXPERT:'/dashboard-expert',AMBASSADOR:'/dashboard-ambassadeur',ADMIN:'/dashboard-admin'};
     return res.json({
-      success:   true,
-      token,                    // ← JWT retourné
-      user_id:   user.id,
-      email:     user.email,
-      full_name: user.full_name,
-      role:      user.role,
-      country:   user.country,
+      success:         true,
+      token,
+      user_id:         user.id,
+      email:           user.email,
+      full_name:       user.full_name,
+      nom_responsable: user.phone || null,   // phone = nom du responsable pour les experts
+      role:            user.role,
+      country:         user.country,
       company,
-      redirect:  redirectMap[user.role]||'/dashboard-pme',
+      redirect:        redirectMap[user.role]||'/dashboard-pme',
     });
   } catch(err){return res.status(500).json({error:err.message});}
 });
