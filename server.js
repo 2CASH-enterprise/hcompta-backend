@@ -566,13 +566,15 @@ app.post('/invitations/envoyer', async (req,res) => {
       console.error('❌ BREVO_API_KEY définie:', !!process.env.BREVO_API_KEY);
       console.error('❌ BREVO_FROM_EMAIL:', process.env.BREVO_FROM_EMAIL || 'NON DÉFINI');
       // Logger dans Supabase pour consultation depuis l'admin
-      await supabase.from('prompt_logs').insert([{
-        prompt_code: 'email_error',
-        company_id:  company_id,
-        input_payload: { type: 'invitation', email, role },
-        output_payload: { error: String(errDetail), status: emailErr.response?.status || 0 },
-        score: 0,
-      }]).catch(() => {});
+      try {
+        await supabase.from('prompt_logs').insert([{
+          prompt_code: 'email_error',
+          company_id:  company_id,
+          input_payload: { type: 'invitation', email, role },
+          output_payload: { error: String(errDetail), status: emailErr.response?.status || 0 },
+          score: 0,
+        }]);
+      } catch(logErr) {}
     }
 
     return res.json({
@@ -994,7 +996,7 @@ app.post('/api/paiement/initier', async (req, res) => {
     }
 
     // Enregistrer la transaction dans Supabase
-    await supabase.from('paiements').insert([{
+    try { await supabase.from('paiements').insert([{
       company_id,
       transaction_id: transactionId,
       plan,
@@ -1005,7 +1007,7 @@ app.post('/api/paiement/initier', async (req, res) => {
       status:       'pending',
       moyen:        moyen_paiement || 'mobile_money',
       payment_url:  cpData.data?.payment_url,
-    }]).catch(() => {});
+    }]); } catch(e) {};
 
     return res.json({
       success:     true,
