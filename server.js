@@ -409,6 +409,21 @@ app.post('/invitations/refuser', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
+// PROFIL EXPERT — Mise à jour nom cabinet / pays
+app.patch('/utilisateurs/profil/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { full_name, country } = req.body;
+    const updates = {};
+    if (full_name) updates.full_name = full_name;
+    if (country)   updates.country   = country;
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Aucun champ à mettre à jour' });
+    const { data, error } = await supabase.from('users').update(updates).eq('id', userId).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, user: data });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 // AMBASSADEUR
 app.get('/ambassadeur/stats/:userId', async (req,res) => {
   try {
