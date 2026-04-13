@@ -459,7 +459,96 @@ app.patch('/utilisateurs/profil/:userId', async (req, res) => {
 });
 
 
-// ── POST /pieces/:pieceId/annuler — Expert annule une pièce (doublon) ──
+// ── GET /pieces/:pieceId/ecritures — Écritures d'une pièce spécifique ──
+app.get('/pieces/:pieceId/ecritures', async (req, res) => {
+  try {
+    const { pieceId } = req.params;
+    const { data, error } = await supabase
+      .from('ecritures')
+      .select('id, journal, date_ecriture, compte, libelle, debit, credit, tiers_id')
+      .eq('piece_id', pieceId)
+      .order('date_ecriture', { ascending: true });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json({ success: true, ecritures: data || [] });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /pieces/:pieceId/extourner — Génère et enregistre l'écriture d'extourne ──
+// En SYSCOHADA, un doublon s'annule par une écriture inverse (extourne)
+// La pièce d'origine reste dans l'historique — seule l'extourne annule l'effet comptable
+app.post('/pieces/:pieceId/extourner', async (req, res) => {
+  try {
+    const { pieceId } = req.params;
+    const { expert_id, notes } = req.body;
+
+    // Récupérer la pièce d'origine
+    const { data: piece, error: ePiece } = await supabase
+      .from('pieces')
+      .select('id, company_id, journal, file_name')
+      .eq('id', pieceId)
+      .single();
+    if (ePiece || !piece) return res.status(404).json({ error: 'Pièce introuvable' });
+
+    // Récupérer les écritures d'origine
+    const { data: ecritures, error: eEcr } = await supabase
+      .from('ecritures')
+      .select('journal, date_ecriture, compte, libelle, debit, credit, tiers_id')
+      .eq('piece_id', pieceId);
+    if (eEcr) return res.status(500).json({ error: eEcr.message });
+    if (!ecritures || ecritures.length === 0) {
+      return res.status(400).json({ error: 'Aucune écriture trouvée pour cette pièce — extourne impossible' });
+    }
+
+    const dateExtourne = new Date().toISOString().slice(0, 10);
+    const libellePrefix = 'EXTOURNE - ';
+
+    // Générer les écritures inverses (débit↔crédit)
+    const extournes = ecritures.map(function(e) {
+      return {
+        company_id:     piece.company_id,
+        piece_id:       null,             // pas liée à la pièce doublon
+        journal:        e.journal,
+        date_ecriture:  dateExtourne,
+        compte:         e.compte,
+        libelle:        libellePrefix + (e.libelle || piece.file_name || 'Doublon'),
+        debit:          Number(e.credit || 0),   // inversé
+        credit:         Number(e.debit  || 0),   // inversé
+        tiers_id:       e.tiers_id || null,
+        status:         'validated',
+      };
+    });
+
+    // Insérer les écritures d'extourne
+    const { data: inserted, error: eIns } = await supabase
+      .from('ecritures')
+      .insert(extournes)
+      .select();
+    if (eIns) return res.status(500).json({ error: 'Erreur insertion extourne : ' + eIns.message });
+
+    // Marquer la pièce d'origine comme "extournée" (pas supprimée)
+    await supabase.from('pieces')
+      .update({ status: 'extourned', updated_at: new Date().toISOString() })
+      .eq('id', pieceId);
+
+    // Logger la correction expert
+    await supabase.from('prompt_logs').insert([{
+      prompt_code:    'expert_extourne',
+      company_id:     piece.company_id,
+      input_payload:  { piece_id: pieceId, motif: 'doublon', nb_ecritures: ecritures.length },
+      output_payload: { nb_extournes: inserted.length, expert_id, notes },
+      score: 100,
+    }]).catch(() => {});
+
+    return res.json({
+      success:          true,
+      message:          `Extourne enregistrée — ${inserted.length} écriture(s) d'annulation créées`,
+      ecritures_extourne: inserted,
+      nb_extournes:     inserted.length,
+    });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /pieces/:pieceId/annuler — Marquer une pièce comme annulée (sans écritures) ──
 app.post('/pieces/:pieceId/annuler', async (req, res) => {
   try {
     const { pieceId } = req.params;
@@ -471,7 +560,6 @@ app.post('/pieces/:pieceId/annuler', async (req, res) => {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
-    // Logger la correction
     await supabase.from('prompt_logs').insert([{
       prompt_code:    'expert_annulation',
       company_id:     data.company_id,
@@ -488,7 +576,6 @@ app.post('/pieces/:pieceId/correction', async (req, res) => {
   try {
     const { pieceId } = req.params;
     const { type, notes, ecritures_corriges, expert_id } = req.body;
-    // Mettre la pièce en statut corrigé
     const { data, error } = await supabase
       .from('pieces')
       .update({ status: 'corrected', updated_at: new Date().toISOString() })
@@ -496,7 +583,6 @@ app.post('/pieces/:pieceId/correction', async (req, res) => {
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
-    // Logger la correction expert
     await supabase.from('prompt_logs').insert([{
       prompt_code:    'expert_correction',
       company_id:     data.company_id,
