@@ -517,7 +517,7 @@ app.post('/ambassadeur/code-promo/valider', async (req,res) => {
 // LANDING — INSCRIPTION
 app.post('/inscription/pme', async (req,res) => {
   try {
-    const {company_name,email,pays,plan,rccm,code_promo,phone,full_name} = req.body;
+    const {company_name,email,pays,plan,rccm,code_promo,phone,full_name,expert_id} = req.body;
     if(!company_name||!email||!pays||!plan||!rccm) return res.status(400).json({error:'Champs obligatoires: company_name, email, pays, plan, rccm'});
     const paysInfo = TVA_PAR_PAYS[pays.toUpperCase()];
     if(!paysInfo) return res.status(400).json({error:'Pays non reconnu'});
@@ -542,6 +542,33 @@ app.post('/inscription/pme', async (req,res) => {
     const {data:company,error:e2} = await supabase.from('companies').insert([{company_name,email:email.toLowerCase(),rccm,country:pays.toUpperCase(),vat_rate:paysInfo.taux,plan:plan.toLowerCase(),subscription_amount_ht_fcfa:montant,trial_start_date:new Date().toISOString().slice(0,10),trial_end_date:trialEnd.toISOString().slice(0,10),owner_user_id:user.id,ambassador_id:ambassadorId,promo_code_used:code_promo?code_promo.toUpperCase():null,status:'trial'}]).select().single();
     if(e2) return res.status(500).json({error:e2.message});
     await supabase.from('company_users').insert([{company_id:company.id,user_id:user.id,role_in_company:'OWNER',status:'active'}]);
+
+    // Si la PME vient d'un lien cabinet → rattacher automatiquement l'expert
+    if (expert_id) {
+      try {
+        // Vérifier que cet expert existe bien
+        const { data: expertUser } = await supabase
+          .from('users')
+          .select('id, role')
+          .eq('id', expert_id)
+          .eq('role', 'EXPERT')
+          .single();
+
+        if (expertUser) {
+          // Créer le lien expert ↔ PME
+          await supabase.from('company_users').insert([{
+            company_id:      company.id,
+            user_id:         expert_id,
+            role_in_company: 'EXPERT',
+            status:          'active',
+            invited_by:      null,
+          }]);
+          console.log(`✅ PME ${company.id} rattachée automatiquement à l'expert ${expert_id}`);
+        }
+      } catch(expertErr) {
+        console.warn('Rattachement expert non critique:', expertErr.message);
+      }
+    }
 
     // Envoyer email de bienvenue
     try {
