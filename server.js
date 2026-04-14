@@ -733,7 +733,7 @@ app.post('/connexion', async (req,res) => {
     if(!user.is_active) return res.status(403).json({error:'Compte désactivé'});
     let company = null;
     if(['PME_OWNER','COLLABORATOR'].includes(user.role)){
-      const {data:cu} = await supabase.from('company_users').select('company_id,companies(id,company_name,country,plan,status,vat_rate)').eq('user_id',user.id).in('role_in_company',['OWNER','COLLABORATOR']).eq('status','active').single();
+      const {data:cu} = await supabase.from('company_users').select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)').eq('user_id',user.id).in('role_in_company',['OWNER','COLLABORATOR']).eq('status','active').single();
       company = cu?.companies||null;
     }
     // Générer le JWT
