@@ -537,7 +537,7 @@ app.post('/pieces/:pieceId/extourner', async (req, res) => {
       input_payload:  { piece_id: pieceId, motif: 'doublon', nb_ecritures: ecritures.length },
       output_payload: { nb_extournes: inserted.length, expert_id, notes },
       score: 100,
-    }]).catch(() => {});
+    }]).then(function(){}, function(){});
 
     return res.json({
       success:          true,
@@ -566,7 +566,7 @@ app.post('/pieces/:pieceId/annuler', async (req, res) => {
       input_payload:  { piece_id: pieceId, motif: motif || 'doublon' },
       output_payload: { expert_id, status: 'cancelled' },
       score: 0,
-    }]).catch(() => {});
+    }]).then(function(){}, function(){});
     return res.json({ success: true, piece: data });
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
@@ -589,7 +589,7 @@ app.post('/pieces/:pieceId/correction', async (req, res) => {
       input_payload:  { piece_id: pieceId, type, notes },
       output_payload: { ecritures_corriges, expert_id },
       score: 100,
-    }]).catch(() => {});
+    }]).then(function(){}, function(){});
     return res.json({ success: true, piece: data });
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
