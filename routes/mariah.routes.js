@@ -97,14 +97,18 @@ router.post('/', async (req, res) => {
 
     const reponse = response.data?.content?.[0]?.text || '';
 
-    // Logger dans prompt_logs si company_id fourni
+    // Logger dans prompt_logs si company_id fourni (non bloquant)
     if (company_id) {
-      supabase.from('prompt_logs').insert([{
-        prompt_code:    'mariah_chat',
-        company_id,
-        input_payload:  { message, history_length: history.length },
-        output_payload: { reponse: reponse.substring(0, 500) },
-      }]).catch(() => {}); // non bloquant
+      (async function() {
+        try {
+          await supabase.from('prompt_logs').insert([{
+            prompt_code:    'mariah_chat',
+            company_id,
+            input_payload:  { message, history_length: history.length },
+            output_payload: { reponse: reponse.substring(0, 500) },
+          }]);
+        } catch(e) {}
+      })();
     }
 
     return res.json({
