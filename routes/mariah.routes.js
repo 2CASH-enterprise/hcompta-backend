@@ -56,14 +56,14 @@ async function getSystemPrompt(pays, scope) {
 // ----------------------------------------------------------------
 router.post('/', async (req, res) => {
   try {
-    const { message, conversation_history, company_id, pays } = req.body;
+    const { message, conversation_history, company_id, pays, system_override } = req.body;
 
     if (!message || !message.trim()) {
       return res.status(400).json({ error: 'Message obligatoire' });
     }
 
-    // Lire le prompt système (depuis DB ou défaut)
-    const systemPrompt = await getSystemPrompt(pays || 'CI', 'pme');
+    // Utiliser le system_override du frontend (contexte PME réel) ou fallback DB
+    const systemPrompt = system_override || await getSystemPrompt(pays || 'CI', 'pme');
 
     // Construire l'historique de conversation
     // conversation_history = [{ role: 'user'|'assistant', content: '...' }]
