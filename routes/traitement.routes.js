@@ -299,7 +299,7 @@ function buildFewShotBlock(exemples) {
 // ================================================================
 // PIPELINE PRINCIPAL : POST /api/traitement/piece/:pieceId
 // ================================================================
-router.post('/piece/:pieceId', async (req, res) => {
+async function traitementHandler(req, res) {
   const { pieceId } = req.params;
   const pipeline = []; // Journal des étapes pour debug
 
@@ -344,10 +344,53 @@ router.post('/piece/:pieceId', async (req, res) => {
 
     pipeline.push({ etape: 1, code: 'PME-01', statut: typePieceEvident ? 'skip-nom-fichier' : 'start' });
 
-    // promptPME01 chargé dans le bloc conditionnel ci-dessous
+    // ── MODÈLES IA par étape ──────────────────────────────────────
+    const MODELE_IDENTIFICATION = process.env.CLAUDE_MODEL_LIGHT || 'claude-haiku-4-5-20251001';
+    const MODELE_CODIFICATION   = process.env.CLAUDE_MODEL       || 'claude-sonnet-4-6';
+    const MODELE_TVA            = process.env.CLAUDE_MODEL_LIGHT || 'claude-haiku-4-5-20251001';
+    const MODELE_SCORE          = process.env.CLAUDE_MODEL_LIGHT || 'claude-haiku-4-5-20251001';
 
-    // Appel IA PME-01 (dans le bloc conditionnel ci-dessus)
-    // Les variables journal, typePiece, confiance sont déjà définies
+    // ── ÉTAPE 1 : PME-01 — Identification de la pièce ───────────
+    let journal      = journalEvident  || 'OD';
+    let typePiece    = typePieceEvident || 'autre';
+    let confiance    = typePieceEvident ? 95 : 50;
+    let identification = { type_piece: typePiece, journal, raison: 'Détection par nom de fichier' };
+    let casFacile    = !!typePieceEvident;
+
+    // Si pas de détection par nom → appel Claude PME-01
+    if (!typePieceEvident) {
+      const promptPME01 = await getPrompt('PME-01', pays);
+      if (promptPME01) {
+        try {
+          const promptIdent = substituerVariables(promptPME01, {
+            pays_client: pays,
+            taux_tva:    String(tva),
+            nom_pme:     nomPME,
+          });
+          const rawIdent = await appelClaude(
+            promptIdent,
+            buildUserContent(base64, mediaType, 'Identifie cette pièce comptable. Réponds UNIQUEMENT en JSON avec type_piece, journal, confiance (0-100), raison.'),
+            200,
+            2,
+            MODELE_IDENTIFICATION
+          );
+          const parsed = parseJSON(rawIdent);
+          if (parsed && parsed.journal) {
+            journal        = JOURNAUX.includes(parsed.journal) ? parsed.journal : (JOURNAL_TO_PROMPT[parsed.journal] ? parsed.journal : 'OD');
+            typePiece      = parsed.type_piece  || 'autre';
+            confiance      = parsed.confiance   || 70;
+            identification = parsed;
+            // Cas facile = confiance élevée pour économiser des appels
+            casFacile = confiance >= 90 && typePiece !== 'autre';
+          }
+        } catch(eIdent) {
+          console.warn('⚠️ PME-01 identification non bloquante:', eIdent.message);
+          // Garder les valeurs par défaut
+        }
+      }
+    }
+
+    pipeline.push({ etape: 1, code: 'PME-01', statut: 'ok', journal, typePiece, confiance });
 
     // ── ÉTAPE 2 : PME-XX — Codification selon journal ────────────
     pipeline.push({ etape: 2, code: JOURNAL_TO_PROMPT[journal] || 'PME-10', statut: 'start' });
@@ -676,11 +719,15 @@ router.post('/piece/:pieceId', async (req, res) => {
     } catch(e2) {}
     return res.status(500).json({ error: err.message, detail: err.response?.data || null, pipeline });
   }
-});
+}
+
+// Enregistrer le handler comme route Express
+router.post('/piece/:pieceId', traitementHandler);
 
 // ================================================================
 // BATCH : POST /api/traitement/batch/:companyId
 // ================================================================
+
 router.post('/batch/:companyId', async (req, res) => {
   try {
     const { companyId } = req.params;
@@ -703,19 +750,23 @@ router.post('/batch/:companyId', async (req, res) => {
       traites:   pieces.length,
     });
 
-    // Traitement séquentiel en arrière-plan
-    for (const piece of pieces) {
-      try {
-        await axios.post(
-          'http://localhost:' + (process.env.PORT || 3000) + '/api/traitement/piece/' + piece.id,
-          {},
-          { timeout: 120000 }
-        );
-        await new Promise(r => setTimeout(r, 1500));
-      } catch(e) {
-        console.error('Erreur pièce ' + (piece.id) + ':', e.message);
+    // Traitement séquentiel en arrière-plan — appel direct (pas localhost qui échoue sur Render)
+    setImmediate(async function() {
+      for (const piece of pieces) {
+        try {
+          // Simuler req/res pour appeler le handler directement
+          const fakeReq = { params: { pieceId: piece.id }, user: req.user };
+          const fakeRes = {
+            json: function(data) { console.log('✅ Pièce traitée (batch):', piece.id, data.success ? 'OK' : data.error); },
+            status: function(code) { return { json: function(data) { console.warn('⚠️ Pièce ' + piece.id + ' status ' + code + ':', data.error); } }; },
+          };
+          await traitementHandler(fakeReq, fakeRes);
+          await new Promise(r => setTimeout(r, 2000)); // 2s entre pièces
+        } catch(e) {
+          console.error('❌ Erreur batch pièce ' + piece.id + ':', e.message);
+        }
       }
-    }
+    });
   } catch(err) {
     return res.status(500).json({ error: err.message });
   }
