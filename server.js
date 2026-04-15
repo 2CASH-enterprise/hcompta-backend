@@ -872,31 +872,36 @@ app.post('/connexion', async (req,res) => {
     if(!user.is_active) return res.status(403).json({error:'Compte désactivé'});
     let company = null;
     if(['PME_OWNER','COLLABORATOR'].includes(user.role)){
-      // Étape 1 : trouver le company_id depuis company_users
+      // Étape 1 : trouver le company_id depuis company_users (sans .single() pour éviter l'erreur si 0 rows)
       let companyId = null;
-      const {data:cuRow} = await supabase.from('company_users')
+      const {data:cuRows, error:cuErr} = await supabase.from('company_users')
         .select('company_id')
         .eq('user_id', user.id)
         .eq('status', 'active')
         .in('role_in_company', ['OWNER','PME_OWNER','COLLABORATOR','ADMIN'])
         .order('created_at', {ascending: false})
-        .limit(1)
-        .single();
-      companyId = cuRow?.company_id || null;
+        .limit(1);
+      if (cuErr) console.warn('[connexion] company_users error:', cuErr.message);
+      companyId = (cuRows && cuRows.length > 0) ? cuRows[0].company_id : null;
+      console.log('[connexion] company_users rows:', cuRows?.length, 'companyId:', companyId);
 
       // Fallback : chercher via owner_user_id dans companies
       if (!companyId) {
-        const {data:ownedCo} = await supabase.from('companies')
-          .select('id').eq('owner_user_id', user.id).limit(1).single();
-        companyId = ownedCo?.id || null;
+        const {data:ownedRows, error:ownErr} = await supabase.from('companies')
+          .select('id').eq('owner_user_id', user.id).limit(1);
+        if (ownErr) console.warn('[connexion] owner_user_id error:', ownErr.message);
+        companyId = (ownedRows && ownedRows.length > 0) ? ownedRows[0].id : null;
+        console.log('[connexion] fallback owner_user_id companyId:', companyId);
       }
 
-      // Étape 2 : charger les données de la company séparément (pas de jointure FK)
+      // Étape 2 : charger les données de la company séparément
       if (companyId) {
-        const {data:compData} = await supabase.from('companies')
+        const {data:compRows, error:compErr} = await supabase.from('companies')
           .select('id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end')
-          .eq('id', companyId).single();
-        company = compData || null;
+          .eq('id', companyId).limit(1);
+        if (compErr) console.warn('[connexion] companies error:', compErr.message);
+        company = (compRows && compRows.length > 0) ? compRows[0] : null;
+        console.log('[connexion] company trouvée:', company?.company_name || 'null');
       }
 
       if (!company) console.warn('[connexion] Aucune company trouvée pour user:', user.id, 'role:', user.role);
