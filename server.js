@@ -13,6 +13,31 @@ const app = express();
 // ----------------------------------------------------------------
 // CORS — Restreint au domaine de production + dev local
 // ----------------------------------------------------------------
+// Rate limiting — protection contre les attaques par force brute
+const _rateLimitMap = {};
+function rateLimit(maxRequests, windowMs) {
+  return function(req, res, next) {
+    const key = req.ip + ':' + req.path;
+    const now = Date.now();
+    if (!_rateLimitMap[key]) _rateLimitMap[key] = [];
+    // Nettoyer les entrées expirées
+    _rateLimitMap[key] = _rateLimitMap[key].filter(t => now - t < windowMs);
+    if (_rateLimitMap[key].length >= maxRequests) {
+      return res.status(429).json({ error: 'Trop de tentatives. Réessayez dans quelques minutes.' });
+    }
+    _rateLimitMap[key].push(now);
+    next();
+  };
+}
+// Nettoyage toutes les 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(_rateLimitMap).forEach(k => {
+    _rateLimitMap[k] = _rateLimitMap[k].filter(t => now - t < 15 * 60 * 1000);
+    if (_rateLimitMap[k].length === 0) delete _rateLimitMap[k];
+  });
+}, 10 * 60 * 1000);
+
 const ORIGINES_AUTORISEES = [
   'https://hcompta-ai.com',
   'https://www.hcompta-ai.com',
@@ -104,23 +129,6 @@ app.post('/connexion/repair', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-// ── Debug temporaire — à supprimer après correction ──────────
-app.get('/debug/user/:email', async (req, res) => {
-  try {
-    const email = decodeURIComponent(req.params.email).toLowerCase();
-    const {data:user} = await supabase.from('users').select('id,email,role,country,is_active').eq('email',email).single();
-    if (!user) return res.json({error:'user not found'});
-    
-    const {data:cuRows} = await supabase.from('company_users')
-      .select('company_id,role_in_company,status').eq('user_id',user.id);
-    
-    const {data:ownedCo} = await supabase.from('companies')
-      .select('id,company_name,status').eq('owner_user_id',user.id);
-    
-    return res.json({user, company_users: cuRows, owned_companies: ownedCo});
-  } catch(e) { return res.json({error:e.message}); }
-});
-
 app.get('/diagnostic', async (req, res) => {
   const diag = {
     env: {
@@ -160,10 +168,9 @@ app.get('/pays/tva/:code', (req,res) => {
 });
 
 // STATS PME
-app.get('/stats/:companyId', async (req,res) => {
+app.get('/stats/:companyId', authOptionnel, async (req,res) => {
   try {
     const {companyId} = req.params;
-    console.log('[stats] appelé pour companyId:', companyId);
     // Requêtes légères en parallèle — pas d'écritures (trop lent sans limit)
     const [{count:total,error:e1},{count:alertes,error:e2},{data:scores,error:e3},{data:company}] = await Promise.all([
       supabase.from('pieces').select('*',{count:'exact',head:true}).eq('company_id',companyId),
@@ -204,7 +211,7 @@ app.get('/stats/:companyId', async (req,res) => {
 });
 
 // PIECES PME
-app.get('/pieces/recent/:companyId', async (req,res) => {
+app.get('/pieces/recent/:companyId', authOptionnel, async (req,res) => {
   try {
     const {data,error} = await supabase.from('pieces')
       .select('id,file_name,file_url,type_piece,journal,score_confiance,status,uploaded_at')
@@ -214,7 +221,7 @@ app.get('/pieces/recent/:companyId', async (req,res) => {
   } catch(err){return res.status(500).json({error:err.message});}
 });
 
-app.get('/pieces/all/:companyId', async (req,res) => {
+app.get('/pieces/all/:companyId', authOptionnel, async (req,res) => {
   try {
     const {data,error} = await supabase.from('pieces')
       .select('id,file_name,file_url,type_piece,journal,score_confiance,status,uploaded_at,processed_at')
@@ -258,7 +265,7 @@ app.post('/tva/generer/:companyId', (req, res) => {
 
 // REPORTING
 // ── GET /ecritures/:companyId — Toutes les écritures d'une PME ──
-app.get('/ecritures/:companyId', async (req, res) => {
+app.get('/ecritures/:companyId', authOptionnel, async (req, res) => {
   try {
     const { companyId } = req.params;
     const { periode, journal } = req.query;
@@ -281,7 +288,7 @@ app.get('/ecritures/:companyId', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/reporting/:companyId', async (req,res) => {
+app.get('/reporting/:companyId', authOptionnel, async (req,res) => {
   try {
     const {data:ecritures,error} = await supabase.from('ecritures').select('compte,debit,credit').eq('company_id',req.params.companyId);
     if(error) return res.status(500).json({error:error.message});
@@ -293,7 +300,7 @@ app.get('/reporting/:companyId', async (req,res) => {
 });
 
 // UTILISATEURS
-app.get('/utilisateurs/:companyId', async (req,res) => {
+app.get('/utilisateurs/:companyId', authOptionnel, async (req,res) => {
   try {
     const {data,error} = await supabase.from('company_users')
       .select('id,role_in_company,status,invited_by,created_at,users(id,email,full_name,phone,role,is_active)')
@@ -304,7 +311,7 @@ app.get('/utilisateurs/:companyId', async (req,res) => {
 });
 
 // NOTIFICATIONS
-app.get('/notifications/:userId', async (req,res) => {
+app.get('/notifications/:userId', authOptionnel, async (req,res) => {
   try {
     const {data,error} = await supabase.from('notifications').select('*').eq('user_id',req.params.userId).eq('is_read',false).order('created_at',{ascending:false}).limit(20);
     if(error) return res.status(500).json({error:error.message});
@@ -513,7 +520,7 @@ app.post('/invitations/accepter', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.post('/invitations/annuler', async (req, res) => {
+app.post('/invitations/annuler', authOptionnel, async (req, res) => {
   try {
     const { invite_id, company_id } = req.body;
     if (!invite_id) return res.status(400).json({ error: 'invite_id obligatoire' });
@@ -545,7 +552,7 @@ app.post('/invitations/refuser', async (req, res) => {
 });
 
 // PROFIL EXPERT — Mise à jour nom cabinet / pays
-app.patch('/utilisateurs/profil/:userId', async (req, res) => {
+app.patch('/utilisateurs/profil/:userId', authOptionnel, async (req, res) => {
   try {
     const { userId } = req.params;
     const { full_name, phone, country } = req.body;
@@ -820,7 +827,7 @@ app.post('/ambassadeur/code-promo/valider', async (req,res) => {
 });
 
 // LANDING — INSCRIPTION
-app.post('/inscription/pme', async (req,res) => {
+app.post('/inscription/pme', rateLimit(5, 60*1000), async (req,res) => {
   try {
     const {company_name,email,pays,plan,rccm,code_promo,phone,full_name,expert_id} = req.body;
     if(!company_name||!email||!pays||!plan||!rccm) return res.status(400).json({error:'Champs obligatoires: company_name, email, pays, plan, rccm'});
@@ -842,11 +849,29 @@ app.post('/inscription/pme', async (req,res) => {
                    : planPrixFCFA;
     const montant  = planPrix[plan.toLowerCase()]||25000;
     const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate()+30);
-    const {data:user,error:e1} = await supabase.from('users').insert([{email:email.toLowerCase(),full_name:full_name||company_name,phone:phone||null,role:'PME_OWNER',country:pays.toUpperCase()}]).select().single();
+    // Inscription atomique: si une étape échoue, rollback des précédentes
+    const {data:user,error:e1} = await supabase.from('users')
+      .insert([{email:email.toLowerCase(),full_name:full_name||company_name,phone:phone||null,role:'PME_OWNER',country:pays.toUpperCase()}])
+      .select().single();
     if(e1) return res.status(500).json({error:e1.message});
-    const {data:company,error:e2} = await supabase.from('companies').insert([{company_name,email:email.toLowerCase(),rccm,country:pays.toUpperCase(),vat_rate:paysInfo.taux,plan:plan.toLowerCase(),subscription_amount_ht_fcfa:montant,trial_start_date:new Date().toISOString().slice(0,10),trial_end_date:trialEnd.toISOString().slice(0,10),owner_user_id:user.id,ambassador_id:ambassadorId,promo_code_used:code_promo?code_promo.toUpperCase():null,status:'trial'}]).select().single();
-    if(e2) return res.status(500).json({error:e2.message});
-    await supabase.from('company_users').insert([{company_id:company.id,user_id:user.id,role_in_company:'OWNER',status:'active'}]);
+
+    const {data:company,error:e2} = await supabase.from('companies')
+      .insert([{company_name,email:email.toLowerCase(),rccm,country:pays.toUpperCase(),vat_rate:paysInfo.taux,plan:plan.toLowerCase(),subscription_amount_ht_fcfa:montant,trial_start_date:new Date().toISOString().slice(0,10),trial_end_date:trialEnd.toISOString().slice(0,10),owner_user_id:user.id,ambassador_id:ambassadorId,promo_code_used:code_promo?code_promo.toUpperCase():null,status:'trial'}])
+      .select().single();
+    if(e2) {
+      // Rollback: supprimer le user créé
+      await supabase.from('users').delete().eq('id', user.id);
+      return res.status(500).json({error:e2.message});
+    }
+
+    const {error:e3} = await supabase.from('company_users')
+      .insert([{company_id:company.id, user_id:user.id, role_in_company:'OWNER', status:'active'}]);
+    if(e3) {
+      // Rollback: supprimer company et user
+      await supabase.from('companies').delete().eq('id', company.id);
+      await supabase.from('users').delete().eq('id', user.id);
+      return res.status(500).json({error:'Erreur liaison compte-entreprise: ' + e3.message});
+    }
 
     // Si la PME vient d'un lien cabinet → rattacher automatiquement l'expert
     // PME vient d'un lien cabinet → créer pending_pme + notifier expert
@@ -891,7 +916,7 @@ app.post('/inscription/pme', async (req,res) => {
 });
 
 // CONNEXION
-app.post('/connexion', async (req,res) => {
+app.post('/connexion', rateLimit(10, 60*1000), async (req,res) => {
   try {
     const {email, expert_id} = req.body;
     if(!email) return res.status(400).json({error:'Email obligatoire'});
@@ -1015,7 +1040,7 @@ app.post('/demande-demo', async (req,res) => {
 });
 
 // INVITATIONS — envoi et liste
-app.post('/invitations/envoyer', async (req,res) => {
+app.post('/invitations/envoyer', authOptionnel, async (req,res) => {
   try {
     const {company_id, email, role, invited_by, expires_at, message} = req.body;
     if (!company_id || !email || !role) return res.status(400).json({error:'company_id, email et role obligatoires'});
@@ -1113,7 +1138,7 @@ app.post('/invitations/envoyer', async (req,res) => {
   } catch(err) {return res.status(500).json({error:err.message});}
 });
 
-app.get('/invitations/:companyId', async (req,res) => {
+app.get('/invitations/:companyId', authOptionnel, async (req,res) => {
   try {
     const {data,error} = await supabase.from('invites')
       .select('id, email, role, status, expires_at, created_at')
@@ -1571,7 +1596,7 @@ app.post('/api/paiement/notify', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/paiement/historique/:companyId', async (req, res) => {
+app.get('/api/paiement/historique/:companyId', authOptionnel, async (req, res) => {
   try {
     const { data, error } = await supabase.from('paiements')
       .select('id,plan,montant_ttc,devise,status,moyen,paid_at,created_at,transaction_id')
