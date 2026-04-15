@@ -63,6 +63,38 @@ const STATUT_TRAITE  = 'processed';
 // TEST
 app.get('/', (req,res) => res.json({status:'ok',message:'H-Compta AI Backend 🚀'}));
 
+// ── Diagnostic rapide — vérifie env vars et Supabase ──────────
+app.get('/diagnostic', async (req, res) => {
+  const diag = {
+    env: {
+      CLAUDE_API_KEY:    process.env.CLAUDE_API_KEY ? 'OK (' + process.env.CLAUDE_API_KEY.slice(0,8) + '...)' : '❌ MANQUANTE',
+      CLAUDE_MODEL:      process.env.CLAUDE_MODEL      || 'claude-opus-4-6 (défaut)',
+      CLAUDE_MODEL_LIGHT:process.env.CLAUDE_MODEL_LIGHT|| 'claude-haiku-4-5-20251001 (défaut)',
+      SUPABASE_URL:      process.env.SUPABASE_URL ? 'OK' : '❌ MANQUANTE',
+      SUPABASE_KEY:      process.env.SUPABASE_ANON_KEY ? 'OK' : '❌ MANQUANTE',
+      BREVO_API_KEY:     process.env.BREVO_API_KEY ? 'OK' : '❌ MANQUANTE',
+      CINETPAY_API_KEY:  process.env.CINETPAY_API_KEY ? 'OK' : '❌ MANQUANTE',
+    },
+    supabase: {}
+  };
+  try {
+    // Test connexion Supabase
+    const { count, error } = await supabase.from('pieces').select('*', {count:'exact', head:true});
+    diag.supabase.pieces_count = error ? ('❌ ' + error.message) : count;
+    
+    // Test table prompts
+    const { data: prompts, error: pe } = await supabase.from('prompts').select('code').eq('actif', true).limit(10);
+    diag.supabase.prompts_actifs = pe ? ('❌ ' + pe.message) : (prompts || []).map(p => p.code);
+    
+    // Test companies
+    const { count: companies } = await supabase.from('companies').select('*', {count:'exact', head:true});
+    diag.supabase.companies_count = companies;
+  } catch(e) {
+    diag.supabase.error = e.message;
+  }
+  return res.json(diag);
+});
+
 // PAYS
 app.get('/pays', (req,res) => res.json(Object.entries(TVA_PAR_PAYS).map(([code,info])=>({code,...info}))));
 app.get('/pays/tva/:code', (req,res) => {
@@ -89,10 +121,11 @@ app.get('/stats/:companyId', async (req,res) => {
     // TVA calculée séparément avec limit pour ne pas bloquer la réponse
     let tva = 0;
     try {
+      // Supabase ne supporte pas LIKE sur .in() — utiliser gte/lte sur le préfixe numérique
       const {data:ecritures} = await supabase
         .from('ecritures').select('compte,debit,credit')
         .eq('company_id',companyId)
-        .in('compte', ['44571','44551','445710','445510','4457100','4455100'])
+        .or('compte.gte.44551,compte.lt.44600')
         .limit(500);
       let tvaC=0,tvaD=0;
       for(const e of ecritures||[]){
