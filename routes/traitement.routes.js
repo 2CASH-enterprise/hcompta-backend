@@ -14,6 +14,26 @@ const supabase = require('../config/supabase');
 // Journaux SYSCOHADA reconnus
 const JOURNAUX = ['ACH','VTE','BQ','CAI','IMM','PAI','EFF','STK','OD'];
 
+// ================================================================
+// PROMPTS DE SECOURS — utilisés si la table Supabase est vide
+// ================================================================
+const PROMPT_FALLBACK_IDENTIFICATION = `Tu es un expert-comptable SYSCOHADA. Analyse cette pièce comptable et identifie-la.
+Réponds UNIQUEMENT en JSON avec ce format exact :
+{"type_piece":"facture_achat|facture_vente|releve_bancaire|recu|autre","journal":"ACH|VTE|BQ|CAI|OD","confiance":85,"raison":"explication courte"}`;
+
+const PROMPT_FALLBACK_CODIFICATION = `Tu es un expert-comptable SYSCOHADA zone OHADA. Pays: {{pays_client}}, TVA: {{taux_tva}}%.
+Analyse cette pièce comptable et génère les écritures SYSCOHADA selon le plan comptable OHADA.
+Règles importantes:
+- Toujours équilibrer débit = crédit
+- Comptes fournisseurs: 401XXX, clients: 411XXX, TVA collectée: 44571, TVA déductible: 44551
+- Journal ACH (achats): débit charge + TVA déductible, crédit fournisseur
+- Journal VTE (ventes): débit client, crédit produit + TVA collectée  
+- Journal BQ (banque): selon le relevé bancaire
+- Journal CAI (caisse): opérations en espèces
+- Journal OD (opérations diverses): écritures de régularisation
+Réponds UNIQUEMENT en JSON avec ce format exact :
+{"type_piece":"facture_achat","journal":"ACH","montant_ttc":100000,"resume":"Description courte","ecritures":[{"compte":"601000","libelle":"Achat marchandises","debit":84746,"credit":0},{"compte":"44551","libelle":"TVA déductible {{taux_tva}}%","debit":15254,"credit":0},{"compte":"401000","libelle":"Fournisseur","debit":0,"credit":100000}]}`;
+
 // Map journal → code prompt
 const JOURNAL_TO_PROMPT = {
   ACH: 'PME-02',
@@ -359,9 +379,10 @@ async function traitementHandler(req, res) {
 
     // Si pas de détection par nom → appel Claude PME-01
     if (!typePieceEvident) {
-      const promptPME01 = await getPrompt('PME-01', pays);
-      if (promptPME01) {
-        try {
+      const promptPME01Raw = await getPrompt('PME-01', pays);
+      // Utiliser le prompt Supabase ou le fallback hardcodé
+      const promptPME01 = promptPME01Raw || PROMPT_FALLBACK_IDENTIFICATION;
+      try {
           const promptIdent = substituerVariables(promptPME01, {
             pays_client: pays,
             taux_tva:    String(tva),
@@ -380,14 +401,11 @@ async function traitementHandler(req, res) {
             typePiece      = parsed.type_piece  || 'autre';
             confiance      = parsed.confiance   || 70;
             identification = parsed;
-            // Cas facile = confiance élevée pour économiser des appels
-            casFacile = confiance >= 90 && typePiece !== 'autre';
+            casFacile      = confiance >= 90 && typePiece !== 'autre';
           }
         } catch(eIdent) {
           console.warn('⚠️ PME-01 identification non bloquante:', eIdent.message);
-          // Garder les valeurs par défaut
         }
-      }
     }
 
     pipeline.push({ etape: 1, code: 'PME-01', statut: 'ok', journal, typePiece, confiance });
@@ -398,9 +416,9 @@ async function traitementHandler(req, res) {
     const codePromptJournal = JOURNAL_TO_PROMPT[journal] || 'PME-10';
     let promptJournal = await getPrompt(codePromptJournal, pays);
 
-    // Fallback si le prompt n'est pas en base
+    // Fallback si le prompt n'est pas en base (table vide ou code inexistant)
     if (!promptJournal) {
-      promptJournal = await getPrompt('analyse_piece', pays) || '';
+      promptJournal = await getPrompt('analyse_piece', pays) || PROMPT_FALLBACK_CODIFICATION;
     }
 
     // Substituer les variables dynamiques
