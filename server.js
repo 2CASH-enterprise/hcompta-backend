@@ -104,6 +104,23 @@ app.post('/connexion/repair', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
+// ── Debug temporaire — à supprimer après correction ──────────
+app.get('/debug/user/:email', async (req, res) => {
+  try {
+    const email = decodeURIComponent(req.params.email).toLowerCase();
+    const {data:user} = await supabase.from('users').select('id,email,role,country,is_active').eq('email',email).single();
+    if (!user) return res.json({error:'user not found'});
+    
+    const {data:cuRows} = await supabase.from('company_users')
+      .select('company_id,role_in_company,status').eq('user_id',user.id);
+    
+    const {data:ownedCo} = await supabase.from('companies')
+      .select('id,company_name,status').eq('owner_user_id',user.id);
+    
+    return res.json({user, company_users: cuRows, owned_companies: ownedCo});
+  } catch(e) { return res.json({error:e.message}); }
+});
+
 app.get('/diagnostic', async (req, res) => {
   const diag = {
     env: {
@@ -146,6 +163,7 @@ app.get('/pays/tva/:code', (req,res) => {
 app.get('/stats/:companyId', async (req,res) => {
   try {
     const {companyId} = req.params;
+    console.log('[stats] appelé pour companyId:', companyId);
     // Requêtes légères en parallèle — pas d'écritures (trop lent sans limit)
     const [{count:total,error:e1},{count:alertes,error:e2},{data:scores,error:e3},{data:company}] = await Promise.all([
       supabase.from('pieces').select('*',{count:'exact',head:true}).eq('company_id',companyId),
