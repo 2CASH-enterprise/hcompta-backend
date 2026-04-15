@@ -872,29 +872,33 @@ app.post('/connexion', async (req,res) => {
     if(!user.is_active) return res.status(403).json({error:'Compte désactivé'});
     let company = null;
     if(['PME_OWNER','COLLABORATOR'].includes(user.role)){
-      // Chercher la company_users row — plusieurs tentatives progressives
-      let cu = null;
-      // Tentative 1 : OWNER actif
-      const {data:cu1} = await supabase.from('company_users')
-        .select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)')
-        .eq('user_id', user.id).eq('role_in_company', 'OWNER').eq('status', 'active').single();
-      cu = cu1;
-      // Tentative 2 : tous rôles PME, tous statuts
-      if (!cu?.companies) {
-        const {data:cu2} = await supabase.from('company_users')
-          .select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)')
-          .eq('user_id', user.id).in('role_in_company', ['OWNER','PME_OWNER','ADMIN','COLLABORATOR'])
-          .order('created_at', {ascending: false}).limit(1).single();
-        cu = cu2;
+      // Étape 1 : trouver le company_id depuis company_users
+      let companyId = null;
+      const {data:cuRow} = await supabase.from('company_users')
+        .select('company_id')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .in('role_in_company', ['OWNER','PME_OWNER','COLLABORATOR','ADMIN'])
+        .order('created_at', {ascending: false})
+        .limit(1)
+        .single();
+      companyId = cuRow?.company_id || null;
+
+      // Fallback : chercher via owner_user_id dans companies
+      if (!companyId) {
+        const {data:ownedCo} = await supabase.from('companies')
+          .select('id').eq('owner_user_id', user.id).limit(1).single();
+        companyId = ownedCo?.id || null;
       }
-      // Tentative 3 : via owner_user_id dans companies directement
-      if (!cu?.companies) {
-        const {data:compDirect} = await supabase.from('companies')
+
+      // Étape 2 : charger les données de la company séparément (pas de jointure FK)
+      if (companyId) {
+        const {data:compData} = await supabase.from('companies')
           .select('id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end')
-          .eq('owner_user_id', user.id).single();
-        if (compDirect) cu = { companies: compDirect };
+          .eq('id', companyId).single();
+        company = compData || null;
       }
-      company = cu?.companies || null;
+
       if (!company) console.warn('[connexion] Aucune company trouvée pour user:', user.id, 'role:', user.role);
     }
     // Générer le JWT
