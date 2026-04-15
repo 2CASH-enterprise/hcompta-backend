@@ -74,29 +74,40 @@ app.get('/pays/tva/:code', (req,res) => {
 app.get('/stats/:companyId', async (req,res) => {
   try {
     const {companyId} = req.params;
-    const [{count:total,error:e1},{count:alertes,error:e2},{data:scores,error:e3},{data:ecritures,error:e4},{data:company}] = await Promise.all([
+    // Requêtes légères en parallèle — pas d'écritures (trop lent sans limit)
+    const [{count:total,error:e1},{count:alertes,error:e2},{data:scores,error:e3},{data:company}] = await Promise.all([
       supabase.from('pieces').select('*',{count:'exact',head:true}).eq('company_id',companyId),
       supabase.from('pieces').select('*',{count:'exact',head:true}).eq('company_id',companyId).in('status',STATUTS_ALERTE),
-      supabase.from('pieces').select('score_confiance').eq('company_id',companyId).eq('status',STATUT_TRAITE).not('score_confiance','is',null),
-      supabase.from('ecritures').select('compte,debit,credit').eq('company_id',companyId),
+      supabase.from('pieces').select('score_confiance').eq('company_id',companyId).eq('status',STATUT_TRAITE).not('score_confiance','is',null).limit(100),
       supabase.from('companies').select('company_name,country,vat_rate,plan,subscription_amount_ht_fcfa,status,trial_end_date').eq('id',companyId).single(),
     ]);
     if(e1) return res.status(500).json({error:e1.message});
     if(e2) return res.status(500).json({error:e2.message});
-    if(e3) return res.status(500).json({error:e3.message});
-    if(e4) return res.status(500).json({error:e4.message});
+
     const scoreMoyen = scores&&scores.length>0 ? Math.round(scores.reduce((s,p)=>s+Number(p.score_confiance),0)/scores.length) : 0;
-    let tvaC=0,tvaD=0;
-    for(const e of ecritures||[]){
-      const c=String(e.compte||'');
-      if(c.startsWith('44571')) tvaC+=Number(e.credit||0)-Number(e.debit||0);
-      if(c.startsWith('44551')) tvaD+=Number(e.debit||0)-Number(e.credit||0);
-    }
+
+    // TVA calculée séparément avec limit pour ne pas bloquer la réponse
+    let tva = 0;
+    try {
+      const {data:ecritures} = await supabase
+        .from('ecritures').select('compte,debit,credit')
+        .eq('company_id',companyId)
+        .in('compte', ['44571','44551','445710','445510','4457100','4455100'])
+        .limit(500);
+      let tvaC=0,tvaD=0;
+      for(const e of ecritures||[]){
+        const c=String(e.compte||'');
+        if(c.startsWith('44571')) tvaC+=Number(e.credit||0)-Number(e.debit||0);
+        if(c.startsWith('44551')) tvaD+=Number(e.debit||0)-Number(e.credit||0);
+      }
+      tva = Math.max(0,tvaC-tvaD);
+    } catch(eTva) { /* TVA non bloquante */ }
+
     return res.json({
       company_id:companyId, company_name:company?.company_name||'', country:company?.country||'',
       vat_rate:company?.vat_rate||18, plan:company?.plan||'', subscription:company?.subscription_amount_ht_fcfa||0,
       status:company?.status||'', trial_end_date:company?.trial_end_date||null,
-      total_factures:total||0, alertes:alertes||0, score_moyen:scoreMoyen, tva:Math.max(0,tvaC-tvaD),
+      total_factures:total||0, alertes:alertes||0, score_moyen:scoreMoyen, tva,
     });
   } catch(err){return res.status(500).json({error:err.message});}
 });
