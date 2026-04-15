@@ -59,7 +59,7 @@ async function getPrompt(code, pays) {
 // ----------------------------------------------------------------
 // Délai entre appels pour respecter la limite 30 000 tokens/minute
 let lastApiCall = 0;
-const MIN_INTERVAL_MS = 3000; // 3s minimum entre appels
+const MIN_INTERVAL_MS = 800;  // 0.8s entre appels Claude (rate limit: 30k tokens/min)
 
 async function appelClaude(systemPrompt, userMessages, maxTokens = 1000, retries = 3, modelOverride = null) {
   // Respecter le délai minimum entre appels (anti-rate-limit)
