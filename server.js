@@ -129,6 +129,44 @@ app.post('/connexion/repair', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
+// ── POST /connexion/restore — Restaurer session depuis token JWT ──
+app.post('/connexion/restore', authRequis, async (req, res) => {
+  try {
+    const userId = req.user?.user_id;
+    if (!userId) return res.status(401).json({ error: 'Token invalide' });
+
+    const {data:user} = await supabase.from('users')
+      .select('id,email,full_name,phone,role,country,is_active')
+      .eq('id', userId).single();
+    if (!user || !user.is_active) return res.status(401).json({ error: 'Compte invalide' });
+
+    let company = null;
+    if (['PME_OWNER','COLLABORATOR'].includes(user.role)) {
+      const {data:cuRows} = await supabase.from('company_users')
+        .select('company_id').eq('user_id', userId).eq('status','active')
+        .in('role_in_company', ['OWNER','PME_OWNER','COLLABORATOR','ADMIN'])
+        .order('created_at', {ascending: false}).limit(1);
+      const companyId = (cuRows && cuRows.length > 0) ? cuRows[0].company_id : null;
+      if (companyId) {
+        const {data:compRows} = await supabase.from('companies')
+          .select('id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end')
+          .eq('id', companyId).limit(1);
+        company = (compRows && compRows.length > 0) ? compRows[0] : null;
+      }
+    }
+
+    return res.json({
+      success:    true,
+      user_id:    user.id,
+      email:      user.email,
+      full_name:  user.full_name,
+      role:       user.role,
+      country:    user.country,
+      company,
+    });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/diagnostic', async (req, res) => {
   const diag = {
     env: {
