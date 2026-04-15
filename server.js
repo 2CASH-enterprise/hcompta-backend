@@ -64,6 +64,36 @@ const STATUT_TRAITE  = 'processed';
 app.get('/', (req,res) => res.json({status:'ok',message:'H-Compta AI Backend 🚀'}));
 
 // ── Diagnostic rapide — vérifie env vars et Supabase ──────────
+// ── POST /connexion/repair — Répare un compte PME sans company_users row ──
+app.post('/connexion/repair', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email obligatoire' });
+    const { data: user } = await supabase.from('users').select('id,email,role,country').eq('email', email.toLowerCase()).single();
+    if (!user) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    if (!['PME_OWNER','COLLABORATOR'].includes(user.role)) return res.status(400).json({ error: 'Rôle non PME' });
+    // Chercher la company par owner_user_id
+    const { data: company } = await supabase.from('companies').select('id,company_name').eq('owner_user_id', user.id).single();
+    if (!company) return res.status(404).json({ error: 'Aucune entreprise trouvée pour cet email' });
+    // Vérifier si company_users existe
+    const { data: existing } = await supabase.from('company_users').select('id,status').eq('user_id', user.id).eq('company_id', company.id).single();
+    if (existing) {
+      // Réactiver si inactif
+      if (existing.status !== 'active') {
+        await supabase.from('company_users').update({ status: 'active' }).eq('id', existing.id);
+        return res.json({ success: true, action: 'reactivé', company_name: company.company_name });
+      }
+      return res.json({ success: true, action: 'déjà_actif', company_name: company.company_name });
+    }
+    // Créer la row manquante
+    const { error: eInsert } = await supabase.from('company_users').insert([{
+      company_id: company.id, user_id: user.id, role_in_company: 'OWNER', status: 'active'
+    }]);
+    if (eInsert) return res.status(500).json({ error: eInsert.message });
+    return res.json({ success: true, action: 'créé', company_name: company.company_name });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/diagnostic', async (req, res) => {
   const diag = {
     env: {
@@ -842,8 +872,30 @@ app.post('/connexion', async (req,res) => {
     if(!user.is_active) return res.status(403).json({error:'Compte désactivé'});
     let company = null;
     if(['PME_OWNER','COLLABORATOR'].includes(user.role)){
-      const {data:cu} = await supabase.from('company_users').select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)').eq('user_id',user.id).in('role_in_company',['OWNER','COLLABORATOR']).eq('status','active').single();
-      company = cu?.companies||null;
+      // Chercher la company_users row — plusieurs tentatives progressives
+      let cu = null;
+      // Tentative 1 : OWNER actif
+      const {data:cu1} = await supabase.from('company_users')
+        .select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)')
+        .eq('user_id', user.id).eq('role_in_company', 'OWNER').eq('status', 'active').single();
+      cu = cu1;
+      // Tentative 2 : tous rôles PME, tous statuts
+      if (!cu?.companies) {
+        const {data:cu2} = await supabase.from('company_users')
+          .select('company_id,companies(id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end)')
+          .eq('user_id', user.id).in('role_in_company', ['OWNER','PME_OWNER','ADMIN','COLLABORATOR'])
+          .order('created_at', {ascending: false}).limit(1).single();
+        cu = cu2;
+      }
+      // Tentative 3 : via owner_user_id dans companies directement
+      if (!cu?.companies) {
+        const {data:compDirect} = await supabase.from('companies')
+          .select('id,company_name,country,plan,status,vat_rate,trial_start_date,trial_end_date,subscription_end')
+          .eq('owner_user_id', user.id).single();
+        if (compDirect) cu = { companies: compDirect };
+      }
+      company = cu?.companies || null;
+      if (!company) console.warn('[connexion] Aucune company trouvée pour user:', user.id, 'role:', user.role);
     }
     // Générer le JWT
     const token = genererToken({
