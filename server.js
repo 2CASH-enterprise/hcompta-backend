@@ -638,6 +638,73 @@ app.post('/pieces/:pieceId/correction', async (req, res) => {
   } catch(err) { return res.status(500).json({ error: err.message }); }
 });
 
+
+// ── GET /cabinet/demandes/:expertUserId ─────────────────────────
+app.get('/cabinet/demandes/:expertUserId', async (req, res) => {
+  try {
+    const { expertUserId } = req.params;
+    const { data, error } = await supabase
+      .from('invites')
+      .select('id, company_id, email, status, created_at, expires_at, companies(id, company_name, country, plan, status)')
+      .eq('invited_by', expertUserId)
+      .eq('role', 'PME_CLIENT')
+      .eq('status', 'pending_pme')
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.json(data || []);
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /cabinet/demandes/valider ──────────────────────────────
+app.post('/cabinet/demandes/valider', async (req, res) => {
+  try {
+    const { invite_id, expert_user_id } = req.body;
+    if (!invite_id || !expert_user_id) return res.status(400).json({ error: 'invite_id et expert_user_id obligatoires' });
+    const { data: invite } = await supabase.from('invites').select('id, company_id, email, status, invited_by').eq('id', invite_id).single();
+    if (!invite) return res.status(404).json({ error: 'Demande introuvable' });
+    if (invite.status !== 'pending_pme') return res.status(409).json({ error: 'Demande déjà traitée' });
+    if (invite.invited_by !== expert_user_id) return res.status(403).json({ error: 'Non autorisé' });
+    const { error: eCU } = await supabase.from('company_users').insert([{
+      company_id: invite.company_id, user_id: expert_user_id, role_in_company: 'EXPERT', status: 'active',
+    }]);
+    if (eCU && !eCU.message.includes('duplicate')) return res.status(500).json({ error: eCU.message });
+    await supabase.from('invites').update({ status: 'accepted' }).eq('id', invite_id);
+    try {
+      const { data: company } = await supabase.from('companies').select('company_name').eq('id', invite.company_id).single();
+      const { data: expert } = await supabase.from('users').select('full_name').eq('id', expert_user_id).single();
+      const emailService = require('./services/email.service');
+      await emailService.envoyerEmail({
+        to: invite.email,
+        subject: 'Votre demande a été acceptée — H-Compta AI',
+        htmlContent: `<div style="font-family:Arial,sans-serif;max-width:580px;margin:0 auto"><div style="background:#0D2B22;padding:24px 32px;border-radius:8px 8px 0 0"><h2 style="color:#fff;margin:0">✅ Demande acceptée</h2></div><div style="padding:24px 32px;background:#fff;border:1px solid #E2EDE8;border-top:none;border-radius:0 0 8px 8px"><p style="color:#2D3A35">Bonne nouvelle ! <strong>${expert?.full_name || 'Votre cabinet expert'}</strong> a accepté votre demande.</p><a href="https://hcompta-ai.com/dashboard_pme_v3.html" style="display:inline-block;background:#0D2B22;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700">Accéder à mon dashboard →</a></div></div>`,
+      });
+    } catch(emailErr) { console.warn('Email PME acceptée:', emailErr.message); }
+    const { data: company } = await supabase.from('companies').select('company_name').eq('id', invite.company_id).single();
+    return res.json({ success: true, message: (company?.company_name || 'PME') + ' ajoutée à votre portefeuille' });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /cabinet/demandes/refuser ──────────────────────────────
+app.post('/cabinet/demandes/refuser', async (req, res) => {
+  try {
+    const { invite_id, expert_user_id } = req.body;
+    if (!invite_id || !expert_user_id) return res.status(400).json({ error: 'invite_id et expert_user_id obligatoires' });
+    const { data: invite } = await supabase.from('invites').select('id, status, invited_by, email').eq('id', invite_id).single();
+    if (!invite) return res.status(404).json({ error: 'Demande introuvable' });
+    if (invite.invited_by !== expert_user_id) return res.status(403).json({ error: 'Non autorisé' });
+    await supabase.from('invites').update({ status: 'declined' }).eq('id', invite_id);
+    try {
+      const emailService = require('./services/email.service');
+      await emailService.envoyerEmail({
+        to: invite.email,
+        subject: 'Votre demande — H-Compta AI',
+        htmlContent: '<div style="font-family:Arial,sans-serif;padding:24px"><p>Votre demande de rattachement au cabinet na pas ete acceptee. Vous pouvez contacter directement le cabinet.</p><p style="color:#9DB8AC;font-size:12px">H-Compta AI</p></div>',
+      });
+    } catch(emailErr) { console.warn('Email PME refusée:', emailErr.message); }
+    return res.json({ success: true, message: 'Demande refusée' });
+  } catch(err) { return res.status(500).json({ error: err.message }); }
+});
+
 // AMBASSADEUR
 app.get('/ambassadeur/stats/:userId', async (req,res) => {
   try {
@@ -724,30 +791,28 @@ app.post('/inscription/pme', async (req,res) => {
     await supabase.from('company_users').insert([{company_id:company.id,user_id:user.id,role_in_company:'OWNER',status:'active'}]);
 
     // Si la PME vient d'un lien cabinet → rattacher automatiquement l'expert
+    // PME vient d'un lien cabinet → créer pending_pme + notifier expert
     if (expert_id) {
       try {
-        // Vérifier que cet expert existe bien
-        const { data: expertUser } = await supabase
-          .from('users')
-          .select('id, role')
-          .eq('id', expert_id)
-          .eq('role', 'EXPERT')
-          .single();
-
+        const { data: expertUser } = await supabase.from('users')
+          .select('id, role, email, full_name').eq('id', expert_id).eq('role', 'EXPERT').single();
         if (expertUser) {
-          // Créer le lien expert ↔ PME
-          await supabase.from('company_users').insert([{
-            company_id:      company.id,
-            user_id:         expert_id,
-            role_in_company: 'EXPERT',
-            status:          'active',
-            invited_by:      null,
+          await supabase.from('invites').insert([{
+            company_id: company.id, email: email.toLowerCase(), role: 'PME_CLIENT',
+            token: require('crypto').randomBytes(16).toString('hex'),
+            status: 'pending_pme', invited_by: expert_id,
+            expires_at: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
           }]);
-          console.log(`✅ PME ${company.id} rattachée automatiquement à l'expert ${expert_id}`);
+          try {
+            const emailService = require('./services/email.service');
+            await emailService.envoyerEmail({
+              to: expertUser.email,
+              subject: `${company_name} demande à rejoindre votre portefeuille — H-Compta AI`,
+              htmlContent: `<div style="font-family:Arial,sans-serif;max-width:580px;margin:0 auto"><div style="background:#0D2B22;padding:24px 32px;border-radius:8px 8px 0 0"><h2 style="color:#fff;margin:0">H-Compta AI — Nouvelle demande</h2></div><div style="padding:24px 32px;background:#fff;border:1px solid #E2EDE8;border-top:none;border-radius:0 0 8px 8px"><p style="color:#2D3A35">Bonjour ${expertUser.full_name || 'Maître'},</p><p><strong>${company_name}</strong> (${pays}) a rejoint H-Compta AI via votre lien et souhaite intégrer votre portefeuille.</p><a href="https://hcompta-ai.com/dashboard_expert_comptable_v2.html" style="display:inline-block;background:#0D2B22;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700">Voir la demande →</a></div></div>`,
+            });
+          } catch(emailErr) { console.warn('Email notif expert:', emailErr.message); }
         }
-      } catch(expertErr) {
-        console.warn('Rattachement expert non critique:', expertErr.message);
-      }
+      } catch(expertErr) { console.warn('pending_pme non bloquant:', expertErr.message); }
     }
 
     // Envoyer email de bienvenue
@@ -770,7 +835,7 @@ app.post('/inscription/pme', async (req,res) => {
 // CONNEXION
 app.post('/connexion', async (req,res) => {
   try {
-    const {email} = req.body;
+    const {email, expert_id} = req.body;
     if(!email) return res.status(400).json({error:'Email obligatoire'});
     const {data:user,error} = await supabase.from('users').select('id,email,full_name,phone,role,country,expert_firm_id,is_active').eq('email',email.toLowerCase()).single();
     if(error||!user) return res.status(404).json({error:'Aucun compte trouvé avec cet email'});
@@ -788,6 +853,37 @@ app.post('/connexion', async (req,res) => {
       country:    user.country,
       company_id: company?.id || null,
     });
+    // PME déjà inscrite qui clique un lien cabinet → créer pending_pme
+    let demande_envoyee = false;
+    if (expert_id && company && ['PME_OWNER','COLLABORATOR'].includes(user.role)) {
+      try {
+        const { data: existing } = await supabase.from('invites')
+          .select('id').eq('company_id', company.id).eq('invited_by', expert_id)
+          .in('status', ['pending_pme','accepted']).single();
+        if (!existing) {
+          const { data: expertUser } = await supabase.from('users')
+            .select('id, email, full_name').eq('id', expert_id).eq('role', 'EXPERT').single();
+          if (expertUser) {
+            await supabase.from('invites').insert([{
+              company_id: company.id, email: user.email.toLowerCase(), role: 'PME_CLIENT',
+              token: require('crypto').randomBytes(16).toString('hex'),
+              status: 'pending_pme', invited_by: expert_id,
+              expires_at: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
+            }]);
+            demande_envoyee = true;
+            try {
+              const emailService = require('./services/email.service');
+              await emailService.envoyerEmail({
+                to: expertUser.email,
+                subject: `${company.company_name} demande à rejoindre votre portefeuille — H-Compta AI`,
+                htmlContent: `<div style="font-family:Arial,sans-serif;padding:24px"><p>Bonjour ${expertUser.full_name || 'Maître'},</p><p><strong>${company.company_name}</strong> (${user.country}) a cliqué votre lien et souhaite rejoindre votre portefeuille.</p><a href="https://hcompta-ai.com/dashboard_expert_comptable_v2.html" style="display:inline-block;background:#0D2B22;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700">Voir la demande →</a></div>`,
+              });
+            } catch(emailErr) { console.warn('Email notif expert connexion:', emailErr.message); }
+          }
+        }
+      } catch(expertErr) { console.warn('pending_pme connexion:', expertErr.message); }
+    }
+
     const redirectMap = {PME_OWNER:'/dashboard-pme',COLLABORATOR:'/dashboard-pme',EXPERT:'/dashboard-expert',AMBASSADOR:'/dashboard-ambassadeur',ADMIN:'/dashboard-admin'};
     return res.json({
       success:         true,
@@ -795,10 +891,11 @@ app.post('/connexion', async (req,res) => {
       user_id:         user.id,
       email:           user.email,
       full_name:       user.full_name,
-      nom_responsable: user.phone || null,   // phone = nom du responsable pour les experts
+      nom_responsable: user.phone || null,
       role:            user.role,
       country:         user.country,
       company,
+      demande_envoyee,
       redirect:        redirectMap[user.role]||'/dashboard-pme',
     });
   } catch(err){return res.status(500).json({error:err.message});}
